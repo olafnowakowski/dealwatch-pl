@@ -75,6 +75,30 @@ By default, successful collection commands persist data to the Git-ignored
 `data/dealwatch.sqlite3` file. Set `DEALWATCH_DATABASE_PATH` to use another local
 SQLite path; never commit database files.
 
+## Hourly local history collection on Windows
+
+Automatic collection has been pulled forward solely to accumulate enough real history
+for M5. The application still performs one collection and exits; Windows Task
+Scheduler invokes the external PowerShell wrapper once per hour. It does not send
+Discord notifications.
+
+After `uv sync --all-groups`, register the task from the project root:
+
+```powershell
+.\scripts\register-hourly-collection.ps1
+schtasks.exe /Run /TN "DealWatchPL-HourlyCollection"
+schtasks.exe /Query /TN "DealWatchPL-HourlyCollection" /V /FO LIST
+```
+
+The task runs only while the current Windows user is signed in, avoids overlapping
+runs with an exclusive local lock file, and appends clear output to the ignored
+`data/logs/hourly-collection.log`. The lock records its process ID and is cleared if
+that process is gone (or after two hours). To stop the schedule, run:
+
+```powershell
+.\scripts\unregister-hourly-collection.ps1
+```
+
 Inspect local price history without collecting or sending a notification. The recent
 minimum defaults to the preceding 30 days and, like the all-time low, considers only
 available observations:

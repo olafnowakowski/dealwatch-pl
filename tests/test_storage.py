@@ -6,7 +6,7 @@ from decimal import Decimal
 from pathlib import Path
 
 from dealwatch.models import Availability, ProductIdentity, ProductOffer
-from dealwatch.storage import SQLiteStore
+from dealwatch.storage import PersistenceError, SQLiteStore
 
 
 def _offer(
@@ -172,3 +172,28 @@ def test_price_history_ignores_unavailable_observations_for_low_prices(tmp_path:
     assert history is not None
     assert history.all_time_low is not None
     assert history.all_time_low.current_price == Decimal("1500")
+
+
+def test_failed_collection_rolls_back_without_changing_existing_history(
+    monkeypatch, tmp_path: Path
+) -> None:
+    database_path = tmp_path / "dealwatch.sqlite3"
+    store = SQLiteStore(database_path)
+    observed_at = datetime(2026, 9, 12, 10, 0, tzinfo=UTC)
+    store.record_collection([_offer(price="1999", observed_at=observed_at)])
+
+    def fail_upsert(connection: sqlite3.Connection, offer: ProductOffer) -> int:
+        raise sqlite3.OperationalError("simulated persistence failure")
+
+    monkeypatch.setattr(store, "_upsert_product", fail_upsert)
+
+    import pytest
+
+    with pytest.raises(PersistenceError, match="Could not persist collection"):
+        store.record_collection(
+            [_offer(price="1899", observed_at=observed_at + timedelta(hours=1))]
+        )
+
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 1
+        assert connection.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0] == 1

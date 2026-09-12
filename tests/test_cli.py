@@ -49,6 +49,39 @@ def test_collect_gpus_emits_normalized_json_and_persists_observation(
         assert connection.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0] == 1
 
 
+def test_quiet_collection_prints_a_compact_completion_line(monkeypatch, tmp_path: Path) -> None:
+    offer = ProductOffer(
+        product=ProductIdentity(
+            retailer="x-kom",
+            retailer_product_id="1001",
+            category="gpu",
+            name="Acme GPU",
+            brand=None,
+            manufacturer_sku=None,
+            product_url="https://www.x-kom.pl/p/1001.html",
+            image_url=None,
+        ),
+        price=Decimal("1999"),
+        currency="PLN",
+        availability=Availability.AVAILABLE,
+        previous_price=None,
+        reported_minimum_price=None,
+        promotion_labels=(),
+        observed_at=datetime(2026, 9, 12, 10, 0, tzinfo=UTC),
+    )
+    monkeypatch.setattr(cli.XkomGpuCollector, "collect_gpus", lambda self: [offer])
+    stdout = io.StringIO()
+
+    exit_code = cli.main(
+        ["xkom", "collect-gpus", "--quiet"],
+        stdout=stdout,
+        environ={"DEALWATCH_DATABASE_PATH": str(tmp_path / "dealwatch.sqlite3")},
+    )
+
+    assert exit_code == 0
+    assert stdout.getvalue() == "Stored 1 x-kom GPU offers.\n"
+
+
 def test_price_history_reads_existing_database_without_collecting(
     monkeypatch, tmp_path: Path
 ) -> None:

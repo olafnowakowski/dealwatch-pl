@@ -146,9 +146,19 @@ Advanced scoring is not required yet.
 
 ---
 
-## M8 — Automatic Monitoring
+## M8 — Automatic Monitoring (partially pulled forward for M5)
 
 Goal: Run DealWatch automatically.
+
+The minimal Windows Task Scheduler setup below was implemented early only to collect
+the real observations required by M5. It is not automatic deal notification.
+
+Completed for local history collection:
+
+- external hourly Task Scheduler invocation
+- one-shot collection process with no Python scheduler loop
+- overlap lock and local failure logging
+- no scheduled Discord notifications
 
 Preferred architecture:
 

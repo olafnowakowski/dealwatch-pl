@@ -24,7 +24,14 @@ def build_parser() -> argparse.ArgumentParser:
     retailer_commands = parser.add_subparsers(dest="retailer", required=True)
     xkom = retailer_commands.add_parser("xkom", help="Commands for x-kom")
     xkom_commands = xkom.add_subparsers(dest="command", required=True)
-    xkom_commands.add_parser("collect-gpus", help="Print normalized x-kom GPU offers as JSON")
+    collect = xkom_commands.add_parser(
+        "collect-gpus", help="Collect and persist x-kom GPU offers"
+    )
+    collect.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print one completion line instead of the full normalized JSON payload",
+    )
     notify = xkom_commands.add_parser("notify-test", help="Send one collected GPU to Discord")
     notify.add_argument("product_id", help="x-kom product ID to send")
     history = xkom_commands.add_parser(
@@ -84,6 +91,9 @@ def main(
             offers = XkomGpuCollector(xkom_client).collect_gpus()
         store.record_collection(offers)
         if args.command == "collect-gpus":
+            if args.quiet:
+                print(f"Stored {len(offers)} x-kom GPU offers.", file=output)
+                return 0
             json.dump([offer.to_dict() for offer in offers], output, ensure_ascii=False, indent=2)
             output.write("\n")
             return 0
