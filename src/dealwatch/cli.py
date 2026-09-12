@@ -27,6 +27,16 @@ def build_parser() -> argparse.ArgumentParser:
     xkom_commands.add_parser("collect-gpus", help="Print normalized x-kom GPU offers as JSON")
     notify = xkom_commands.add_parser("notify-test", help="Send one collected GPU to Discord")
     notify.add_argument("product_id", help="x-kom product ID to send")
+    history = xkom_commands.add_parser(
+        "price-history", help="Print stored price history for one GPU"
+    )
+    history.add_argument("product_id", help="x-kom product ID to inspect")
+    history.add_argument(
+        "--days",
+        type=_positive_integer,
+        default=30,
+        help="Recent-minimum window in days (default: 30)",
+    )
     return parser
 
 
@@ -53,11 +63,26 @@ def main(
         environment = environ
 
     try:
+        store = SQLiteStore(_database_path(environment))
+        if args.command == "price-history":
+            history = store.get_price_history(
+                "x-kom", args.product_id, recent_window_days=args.days
+            )
+            if history is None:
+                print(
+                    f"Error: x-kom product {args.product_id} has no stored price history.",
+                    file=errors,
+                )
+                return 1
+            json.dump(history.to_dict(), output, ensure_ascii=False, indent=2)
+            output.write("\n")
+            return 0
+
         with httpx.Client(
             headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=20.0, follow_redirects=True
         ) as xkom_client:
             offers = XkomGpuCollector(xkom_client).collect_gpus()
-        SQLiteStore(_database_path(environment)).record_collection(offers)
+        store.record_collection(offers)
         if args.command == "collect-gpus":
             json.dump([offer.to_dict() for offer in offers], output, ensure_ascii=False, indent=2)
             output.write("\n")
@@ -87,3 +112,13 @@ def _find_offer(offers: list[ProductOffer], product_id: str) -> ProductOffer:
 def _database_path(environment: Mapping[str, str]) -> Path:
     configured_path = environment.get("DEALWATCH_DATABASE_PATH")
     return Path(configured_path) if configured_path else DEFAULT_DATABASE_PATH
+
+
+def _positive_integer(value: str) -> int:
+    try:
+        parsed = int(value)
+    except ValueError as error:
+        raise argparse.ArgumentTypeError("must be a positive integer") from error
+    if parsed <= 0:
+        raise argparse.ArgumentTypeError("must be a positive integer")
+    return parsed

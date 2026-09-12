@@ -75,6 +75,15 @@ By default, successful collection commands persist data to the Git-ignored
 `data/dealwatch.sqlite3` file. Set `DEALWATCH_DATABASE_PATH` to use another local
 SQLite path; never commit database files.
 
+Inspect local price history without collecting or sending a notification. The recent
+minimum defaults to the preceding 30 days and, like the all-time low, considers only
+available observations:
+
+```powershell
+uv run dealwatch xkom price-history 1318534
+uv run dealwatch xkom price-history 1318534 --days 14
+```
+
 To configure a Discord webhook locally, copy the safe template to `.env`, then paste
 the URL after `DISCORD_WEBHOOK_URL=`. The real `.env` is ignored by Git; only
 `.env.example` is tracked.

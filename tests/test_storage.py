@@ -115,3 +115,60 @@ def test_collection_records_an_observation_for_each_product(tmp_path: Path) -> N
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 2
         assert connection.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0] == 2
+
+
+def test_price_history_returns_ordered_observations_and_available_price_lows(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "dealwatch.sqlite3"
+    store = SQLiteStore(database_path)
+    as_of = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
+    store.record_collection(
+        [
+            _offer(price="1000", observed_at=as_of - timedelta(days=40)),
+            _offer(price="1800", observed_at=as_of - timedelta(days=20)),
+            _offer(price="1500", old_price="1800", observed_at=as_of),
+        ]
+    )
+
+    history = store.get_price_history("x-kom", "1001", recent_window_days=30, as_of=as_of)
+
+    assert history is not None
+    assert history.product.name == "Acme GPU"
+    assert [observation.current_price for observation in history.observations] == [
+        Decimal("1000"),
+        Decimal("1800"),
+        Decimal("1500"),
+    ]
+    assert history.current_observation is not None
+    assert history.current_observation.current_price == Decimal("1500")
+    assert history.previous_observation is not None
+    assert history.previous_observation.current_price == Decimal("1800")
+    assert history.all_time_low is not None
+    assert history.all_time_low.current_price == Decimal("1000")
+    assert history.recent_minimum is not None
+    assert history.recent_minimum.current_price == Decimal("1500")
+
+
+def test_price_history_ignores_unavailable_observations_for_low_prices(tmp_path: Path) -> None:
+    database_path = tmp_path / "dealwatch.sqlite3"
+    as_of = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
+    available = _offer(price="1500", observed_at=as_of - timedelta(days=1))
+    unavailable = ProductOffer(
+        product=available.product,
+        price=Decimal("1"),
+        currency="PLN",
+        availability=Availability.OUT_OF_STOCK,
+        previous_price=None,
+        reported_minimum_price=None,
+        promotion_labels=(),
+        observed_at=as_of,
+    )
+    store = SQLiteStore(database_path)
+    store.record_collection([available, unavailable])
+
+    history = store.get_price_history("x-kom", "1001", as_of=as_of)
+
+    assert history is not None
+    assert history.all_time_low is not None
+    assert history.all_time_low.current_price == Decimal("1500")

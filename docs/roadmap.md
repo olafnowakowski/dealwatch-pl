@@ -99,15 +99,16 @@ Do not implement deal detection yet.
 
 ---
 
-## M5 — Price History Logic 🚧 NEXT
+## M5 — Price History Logic 🚧
 
 Goal: Provide usable historical price information for products.
 
 Planned:
 
-- retrieve recent observations
-- historical minimum
-- recent minimum
+- [x] retrieve ordered observations
+- [x] historical minimum from available observations
+- [x] configurable recent minimum from available observations
+- [x] current and previous observation retrieval
 - averages/medians over useful periods
 - price-change calculations
 
