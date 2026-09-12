@@ -39,3 +39,22 @@ Price history and advanced deal scoring come after basic collection works.
 - Keep docs/roadmap.md aligned with implemented milestones.
 - Mark completed roadmap items only after they have been verified.
 - When implementing a GitHub issue, reference its number where appropriate.
+
+## Git workflow
+
+- Use Git to track all project changes.
+- Before starting work, inspect the current Git status.
+- Keep commits small and focused on one logical change or milestone.
+- Use conventional-style commit messages where practical, for example:
+  - feat(xkom): add GPU collector
+  - fix(xkom): handle missing prices
+  - test(xkom): add product parsing fixtures
+  - docs: update project roadmap
+  - chore: configure project tooling
+- Do not commit secrets, API keys, Discord webhook URLs, credentials, `.env` files, or local runtime data.
+- Update `.gitignore` when new local/generated files need to be excluded.
+- Run relevant tests before committing implementation changes.
+- Do not mark documentation or roadmap items as completed until the implementation has been verified.
+- After a requested milestone is complete and verified, commit the changes and push them to the configured GitHub remote.
+- Do not rewrite published Git history, force-push, or delete remote branches unless explicitly requested.
+- Do not create unrelated commits or include unrelated working-tree changes.
