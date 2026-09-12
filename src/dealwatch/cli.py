@@ -14,6 +14,7 @@ import httpx
 
 from dealwatch.adapters.xkom import DEFAULT_USER_AGENT, XkomCollectionError, XkomGpuCollector
 from dealwatch.config import load_dotenv
+from dealwatch.deals import evaluate_deal
 from dealwatch.discord import DiscordNotificationError, send_test_notification
 from dealwatch.models import ProductOffer
 from dealwatch.storage import DEFAULT_DATABASE_PATH, PersistenceError, SQLiteStore
@@ -34,6 +35,10 @@ def build_parser() -> argparse.ArgumentParser:
     )
     notify = xkom_commands.add_parser("notify-test", help="Send one collected GPU to Discord")
     notify.add_argument("product_id", help="x-kom product ID to send")
+    xkom_commands.add_parser(
+        "evaluate-gpus",
+        help="Collect, persist, and print explained deal candidates without notifying",
+    )
     history = xkom_commands.add_parser(
         "price-history", help="Print stored price history for one GPU"
     )
@@ -98,6 +103,22 @@ def main(
             output.write("\n")
             return 0
 
+        if args.command == "evaluate-gpus":
+            candidates, baseline_counts = _evaluate_offers(store, offers)
+            json.dump(
+                {
+                    "evaluated_count": len(offers),
+                    "history_baseline_counts": baseline_counts,
+                    "candidate_count": len(candidates),
+                    "candidates": candidates,
+                },
+                output,
+                ensure_ascii=False,
+                indent=2,
+            )
+            output.write("\n")
+            return 0
+
         webhook_url = environment.get("DISCORD_WEBHOOK_URL")
         if not webhook_url:
             print("DISCORD_WEBHOOK_URL must be set for notify-test.", file=errors)
@@ -117,6 +138,40 @@ def _find_offer(offers: list[ProductOffer], product_id: str) -> ProductOffer:
         if offer.product.retailer_product_id == product_id:
             return offer
     raise XkomCollectionError(f"x-kom product {product_id} was not found in the GPU category")
+
+
+def _evaluate_offers(
+    store: SQLiteStore,
+    offers: list[ProductOffer],
+) -> tuple[list[dict[str, object]], dict[str, int]]:
+    candidates: list[dict[str, object]] = []
+    baseline_counts: dict[str, int] = {}
+    for offer in offers:
+        history = store.get_price_history(
+            offer.product.retailer,
+            offer.product.retailer_product_id,
+            as_of=offer.observed_at,
+        )
+        if history is None:
+            raise PersistenceError(
+                f"Persisted x-kom product {offer.product.retailer_product_id} could not be read"
+            )
+        evaluation = evaluate_deal(offer, history)
+        baseline = evaluation.history_baseline.value
+        baseline_counts[baseline] = baseline_counts.get(baseline, 0) + 1
+        candidate = evaluation.candidate
+        if candidate is None:
+            continue
+        already_notified = store.has_successful_notification_for(
+            candidate.product,
+            candidate.fingerprint,
+        )
+        payload = candidate.to_dict()
+        payload["history"] = evaluation.history_analysis.to_dict()
+        payload["already_notified"] = already_notified
+        payload["notification_eligible"] = not already_notified
+        candidates.append(payload)
+    return candidates, baseline_counts
 
 
 def _database_path(environment: Mapping[str, str]) -> Path:

@@ -136,20 +136,23 @@ M6 intentionally does not define a deal, a cooldown, or an automatic notificatio
 
 ---
 
-## M7 — Basic Deal Detection
+## M7 — Basic Deal Detection ✅
 
 Goal: Determine whether a price is genuinely attractive using DealWatch's own history.
 
-Initial signals may include:
+Completed:
 
-- price drop vs previous observation
-- price vs recent median
-- recent historical low
-- retailer old/regular price as a secondary signal
+- deterministic, configurable rule-based candidate engine
+- historical 7/30-day median, low-price, and previous-price signals
+- coverage-aware history baseline exposed for every evaluation
+- young-history sharp-drop fallback
+- retailer old/regular price used only as supporting evidence
+- stable candidate fingerprints for M6 eligibility checks
+- manual candidate-inspection CLI with no automatic delivery or state writes
 
-Avoid relying solely on retailer promotion labels.
-
-Advanced scoring is not required yet.
+No Deal Score, automatic alert, cooldown, or re-arming policy is included. Same
+product/same-price candidates remain deduplicated indefinitely until a later milestone
+introduces an explicit re-arming rule.
 
 ---
 
@@ -267,7 +270,7 @@ Do not introduce production infrastructure prematurely.
 
 ## Current Status
 
-Current milestone: **M6 — Notification State & Deduplication is complete**.
+Current milestone: **M7 — Basic Deal Detection is complete**.
 
 Completed end-to-end pipeline:
 
@@ -281,4 +284,5 @@ x-kom
 → verified real notification
 ```
 
-The next logical milestone is M7 — Basic Deal Detection. It has not been started.
+Automatic Discord delivery remains intentionally unstarted. The next roadmap work must
+be explicitly selected before beginning it.

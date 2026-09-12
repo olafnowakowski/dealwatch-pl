@@ -7,13 +7,13 @@ The long-term goal is to monitor retailers such as x-kom, Morele, Komputronik an
 ## Current Status
 
 🚧 Early development — x-kom GPU collection, SQLite price history and statistics,
-hourly local history collection, Discord delivery tests, and reusable notification
-state are implemented and verified.
+hourly local history collection, notification state, and rule-based deal candidate
+detection are implemented and verified.
 
 The current milestone is x-kom → GPU products → normalized product offers → local
-SQLite observations → notification state → an explicit Discord delivery test. It
-deliberately does not yet include deal scoring, automatic Discord alerts, or other
-retailers.
+SQLite observations → explained deal candidates → notification state → an explicit
+Discord delivery test. It deliberately does not yet include deal scoring, automatic
+Discord alerts, or other retailers.
 
 ## Planned Features
 
@@ -40,11 +40,12 @@ x-kom GPU category HTML
  ProductIdentity + ProductOffer
           ↓
        SQLite store
-       ↙          ↘
-price-history      notification state
-analysis           (fingerprint deduplication)
-       ↓          ↓
- CLI JSON output / manual Discord test
+       ↙           ↓
+price-history   deal engine
+analysis             ↓
+           candidate JSON → notification state
+                              ↓
+                    manual Discord test only
 ```
 
 `ProductIdentity` keeps retailer product identity separate from price. `ProductOffer`
@@ -57,6 +58,11 @@ identity. A future deal rule supplies an alert type, a stable fingerprint, and a
 optional audit fields. The state layer uses that caller-defined fingerprint to decide
 whether the product has already received an equivalent successful notification. It
 does not decide whether something is a deal or apply a cooldown policy.
+
+The pure deal engine evaluates a newly collected offer against local history that
+predates it, so a current price never affects its own median or low baseline. It emits
+an explained candidate only when a deterministic historical or young-history rule is
+met; it does not send Discord messages or persist a notification event.
 
 ## Development Approach
 
@@ -132,6 +138,29 @@ at least 80% actual time coverage and at least 80% of the expected hourly availa
 observations. The JSON reports the observed count, required count, coverage seconds,
 and coverage ratio for each window. This is expected until the hourly collector has
 accumulated enough local history.
+
+## Manual deal-candidate evaluation
+
+Run one normal x-kom collection, persist it, and inspect rule-based candidates without
+sending Discord notifications:
+
+```powershell
+uv run dealwatch xkom evaluate-gpus
+```
+
+The output reports how many products were evaluated, counts their factual history
+baselines (`young_history`, `sufficient_7d`, or `sufficient_30d`), and gives each
+candidate its price, reasons, comparisons, fingerprint, and M6 notification
+eligibility. The first version requires at least `100 PLN` plus: `8%` below a 7-day
+median, `10%` below a 30-day median, `5%` below the prior all-time low, or (when
+history is young) an `8%` drop versus the previous available price. A new 30-day low
+requires `8%` plus sufficient 30-day coverage. Retailer old prices are supporting
+evidence only, never a qualification on their own.
+
+Candidate fingerprints use `m7:v1:{currency}:{price_to_two_decimals}` and are
+product-scoped by M6.
+The same product at the same price is therefore deduplicated indefinitely in this
+version. Re-arming after price recovery or a cooldown is intentionally deferred.
 
 To configure a Discord webhook locally, copy the safe template to `.env`, then paste
 the URL after `DISCORD_WEBHOOK_URL=`. The real `.env` is ignored by Git; only

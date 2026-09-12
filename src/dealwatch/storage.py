@@ -207,6 +207,15 @@ class SQLiteStore:
     def has_successful_notification(self, event: NotificationEvent) -> bool:
         """Return whether this caller-defined alert was previously delivered."""
 
+        return self.has_successful_notification_for(event.product, event.fingerprint)
+
+    def has_successful_notification_for(
+        self,
+        product: ProductIdentity,
+        fingerprint: str,
+    ) -> bool:
+        """Return whether a product-specific candidate fingerprint was delivered."""
+
         try:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
             with self._transaction() as connection:
@@ -221,9 +230,9 @@ class SQLiteStore:
                       AND notification.fingerprint = ?
                     """,
                     (
-                        event.product.retailer,
-                        event.product.retailer_product_id,
-                        event.fingerprint,
+                        product.retailer,
+                        product.retailer_product_id,
+                        fingerprint,
                     ),
                 ).fetchone()
         except (OSError, sqlite3.Error) as error:
