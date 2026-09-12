@@ -12,6 +12,7 @@ from typing import TextIO
 import httpx
 
 from dealwatch.adapters.xkom import DEFAULT_USER_AGENT, XkomCollectionError, XkomGpuCollector
+from dealwatch.config import load_dotenv
 from dealwatch.discord import DiscordNotificationError, send_test_notification
 from dealwatch.models import ProductOffer
 
@@ -40,6 +41,11 @@ def main(
     errors = stderr or sys.stderr
     args = build_parser().parse_args(argv)
     environment = environ if environ is not None else os.environ
+    try:
+        load_dotenv(environ=environment)
+    except ValueError as error:
+        print(f"Configuration error: {error}", file=errors)
+        return 2
 
     try:
         with httpx.Client(

@@ -67,11 +67,21 @@ The collector fetches x-kom's public GPU category pages through ordinary HTTP,
 follows their pagination links, and parses the server-rendered hydration JSON. It
 waits at least one second between category-page requests.
 
-To test a Discord webhook with one in-stock x-kom product, set the webhook only in
-your shell or an ignored `.env` file, then pass an ID emitted by `collect-gpus`:
+To configure a Discord webhook locally, copy the safe template to `.env`, then paste
+the URL after `DISCORD_WEBHOOK_URL=`. The real `.env` is ignored by Git; only
+`.env.example` is tracked.
 
 ```powershell
-$env:DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/..."
+Copy-Item .env.example .env
+notepad .env
+git check-ignore -v .env
+```
+
+The CLI loads `.env` automatically and leaves an already-set shell variable unchanged.
+To send an explicit test notification for one in-stock x-kom product, pass an ID
+emitted by `collect-gpus`:
+
+```powershell
 uv run dealwatch xkom notify-test 1318534
 ```
 
