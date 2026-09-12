@@ -58,3 +58,11 @@ Price history and advanced deal scoring come after basic collection works.
 - After a requested milestone is complete and verified, commit the changes and push them to the configured GitHub remote.
 - Do not rewrite published Git history, force-push, or delete remote branches unless explicitly requested.
 - Do not create unrelated commits or include unrelated working-tree changes.
+
+## Project roadmap
+
+- Read `docs/roadmap.md` before planning or implementing a new milestone.
+- Follow milestone order unless the user explicitly changes priorities.
+- Implement only the requested/current milestone.
+- Do not silently start future milestones.
+- Update `docs/roadmap.md` after a milestone has been implemented and verified.
