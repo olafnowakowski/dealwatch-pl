@@ -6,11 +6,12 @@ The long-term goal is to monitor retailers such as x-kom, Morele, Komputronik an
 
 ## Current Status
 
-🚧 Early development — the x-kom GPU collection MVP is implemented and verified.
+🚧 Early development — x-kom GPU collection, SQLite price history, and a Discord
+delivery test are implemented and verified.
 
-The current MVP is x-kom → GPU products → normalized product offers → an explicit
-Discord delivery test. It deliberately does not yet include price history, automatic
-deal scoring, scheduling, or other retailers.
+The current milestone is x-kom → GPU products → normalized product offers → local
+SQLite observations → an explicit Discord delivery test. It deliberately does not
+yet include deal scoring, automatic alerts, scheduling, or other retailers.
 
 ## Planned Features
 
@@ -36,12 +37,15 @@ x-kom GPU category HTML
           ↓
  ProductIdentity + ProductOffer
           ↓
+       SQLite store
+          ↓
  CLI JSON output / manual Discord test
 ```
 
 `ProductIdentity` keeps retailer product identity separate from price. `ProductOffer`
 records the observed price, availability, promotional information, and timestamp.
-Price-history storage will be added later.
+Each successful collection upserts products by retailer plus external product ID, then
+appends one SQLite price observation per offer.
 
 ## Development Approach
 
@@ -67,6 +71,10 @@ The collector fetches x-kom's public GPU category pages through ordinary HTTP,
 follows their pagination links, and parses the server-rendered hydration JSON. It
 waits at least one second between category-page requests.
 
+By default, successful collection commands persist data to the Git-ignored
+`data/dealwatch.sqlite3` file. Set `DEALWATCH_DATABASE_PATH` to use another local
+SQLite path; never commit database files.
+
 To configure a Discord webhook locally, copy the safe template to `.env`, then paste
 the URL after `DISCORD_WEBHOOK_URL=`. The real `.env` is ignored by Git; only
 `.env.example` is tracked.
@@ -85,9 +93,9 @@ emitted by `collect-gpus`:
 uv run dealwatch xkom notify-test 1318534
 ```
 
-`notify-test` is an explicit operator action and can be repeated. Automated alerts,
-including persistent duplicate prevention, are deferred until the price-history and
-scheduling milestone.
+`notify-test` is an explicit operator action and can be repeated. It also persists
+the collection it performs. Automated alerts and persistent notification deduplication
+remain deferred.
 
 ## Development
 

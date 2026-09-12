@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from pathlib import Path
 from typing import TextIO
 
 import httpx
@@ -15,6 +16,7 @@ from dealwatch.adapters.xkom import DEFAULT_USER_AGENT, XkomCollectionError, Xko
 from dealwatch.config import load_dotenv
 from dealwatch.discord import DiscordNotificationError, send_test_notification
 from dealwatch.models import ProductOffer
+from dealwatch.storage import DEFAULT_DATABASE_PATH, PersistenceError, SQLiteStore
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -40,18 +42,22 @@ def main(
     output = stdout or sys.stdout
     errors = stderr or sys.stderr
     args = build_parser().parse_args(argv)
-    environment = environ if environ is not None else os.environ
-    try:
-        load_dotenv(environ=environment)
-    except ValueError as error:
-        print(f"Configuration error: {error}", file=errors)
-        return 2
+    if environ is None:
+        try:
+            load_dotenv()
+        except ValueError as error:
+            print(f"Configuration error: {error}", file=errors)
+            return 2
+        environment: Mapping[str, str] = os.environ
+    else:
+        environment = environ
 
     try:
         with httpx.Client(
             headers={"User-Agent": DEFAULT_USER_AGENT}, timeout=20.0, follow_redirects=True
         ) as xkom_client:
             offers = XkomGpuCollector(xkom_client).collect_gpus()
+        SQLiteStore(_database_path(environment)).record_collection(offers)
         if args.command == "collect-gpus":
             json.dump([offer.to_dict() for offer in offers], output, ensure_ascii=False, indent=2)
             output.write("\n")
@@ -66,7 +72,7 @@ def main(
             send_test_notification(discord_client, webhook_url, offer)
         print(f"Sent test notification for x-kom product {args.product_id}.", file=output)
         return 0
-    except (XkomCollectionError, DiscordNotificationError) as error:
+    except (XkomCollectionError, DiscordNotificationError, PersistenceError) as error:
         print(f"Error: {error}", file=errors)
         return 1
 
@@ -76,3 +82,8 @@ def _find_offer(offers: list[ProductOffer], product_id: str) -> ProductOffer:
         if offer.product.retailer_product_id == product_id:
             return offer
     raise XkomCollectionError(f"x-kom product {product_id} was not found in the GPU category")
+
+
+def _database_path(environment: Mapping[str, str]) -> Path:
+    configured_path = environment.get("DEALWATCH_DATABASE_PATH")
+    return Path(configured_path) if configured_path else DEFAULT_DATABASE_PATH
