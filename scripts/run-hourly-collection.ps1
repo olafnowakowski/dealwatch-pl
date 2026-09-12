@@ -7,7 +7,7 @@ $ErrorActionPreference = "Stop"
 $projectRoot = Split-Path -Parent $PSScriptRoot
 $dataDirectory = Join-Path $projectRoot "data"
 $logDirectory = Join-Path $dataDirectory "logs"
-$logFile = Join-Path $logDirectory "hourly-collection.log"
+$logFile = Join-Path $logDirectory "hourly-monitoring.log"
 $lockFile = Join-Path $dataDirectory "hourly-collection.lock"
 $lockStream = $null
 $locationPushed = $false
@@ -16,7 +16,7 @@ New-Item -ItemType Directory -Force -Path $logDirectory | Out-Null
 Push-Location -LiteralPath $projectRoot
 $locationPushed = $true
 
-function Write-CollectionLog {
+function Write-MonitoringLog {
     param(
         [Parameter(Mandatory = $true)][string]$Level,
         [Parameter(Mandatory = $true)][string]$Message
@@ -24,6 +24,18 @@ function Write-CollectionLog {
 
     $timestamp = (Get-Date).ToUniversalTime().ToString("o")
     "$timestamp [$Level] $Message" | Out-File -LiteralPath $logFile -Append -Encoding utf8
+}
+
+function Send-MonitoringFailureNotice {
+    param([Parameter(Mandatory = $true)][string]$Message)
+
+    try {
+        $msg = Get-Command msg.exe -ErrorAction Stop
+        & $msg.Source $env:USERNAME /TIME:60 "DealWatch monitoring failed: $Message" | Out-Null
+    }
+    catch {
+        Write-MonitoringLog -Level "WARN" -Message "Could not show local failure notice: $($_.Exception.Message)"
+    }
 }
 
 try {
@@ -41,7 +53,7 @@ try {
         }
         if ($age.TotalHours -ge 2 -or (-not $ownerIsRunning -and $age.TotalSeconds -ge 10)) {
             Remove-Item -LiteralPath $lockFile -Force
-            Write-CollectionLog -Level "WARN" -Message "Removed stale collection lock."
+            Write-MonitoringLog -Level "WARN" -Message "Removed stale monitoring lock."
         }
     }
 
@@ -57,7 +69,7 @@ try {
         $lockStream.Flush()
     }
     catch [System.IO.IOException] {
-        Write-CollectionLog -Level "INFO" -Message "Skipped overlapping collection run."
+        Write-MonitoringLog -Level "INFO" -Message "Skipped overlapping monitoring run."
         exit 0
     }
 
@@ -66,19 +78,20 @@ try {
         throw "Missing virtual environment Python at $python. Run 'uv sync --all-groups' first."
     }
 
-    Write-CollectionLog -Level "INFO" -Message "Starting hourly x-kom collection."
-    $commandOutput = & $python -m dealwatch xkom collect-gpus --quiet 2>&1
+    Write-MonitoringLog -Level "INFO" -Message "Starting hourly x-kom monitoring."
+    $commandOutput = & $python -m dealwatch xkom monitor-gpus --send --quiet 2>&1
     $exitCode = $LASTEXITCODE
     foreach ($line in $commandOutput) {
-        Write-CollectionLog -Level "INFO" -Message $line.ToString()
+        Write-MonitoringLog -Level "INFO" -Message $line.ToString()
     }
     if ($exitCode -ne 0) {
-        throw "Collection command exited with code $exitCode."
+        throw "Monitoring command exited with code $exitCode."
     }
-    Write-CollectionLog -Level "INFO" -Message "Hourly x-kom collection completed."
+    Write-MonitoringLog -Level "INFO" -Message "Hourly x-kom monitoring completed."
 }
 catch {
-    Write-CollectionLog -Level "ERROR" -Message $_.Exception.Message
+    Write-MonitoringLog -Level "ERROR" -Message $_.Exception.Message
+    Send-MonitoringFailureNotice -Message "See $logFile for details."
     Write-Error $_
     exit 1
 }

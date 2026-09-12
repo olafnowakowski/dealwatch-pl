@@ -194,3 +194,75 @@ def test_evaluate_gpus_prints_candidates_without_sending_or_recording_notificati
     assert not candidate["notification_eligible"]
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM sent_notifications").fetchone()[0] == 1
+
+
+def test_monitor_gpus_dry_run_persists_observation_but_never_records_notifications(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observed_at = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
+    offer = ProductOffer(
+        product=ProductIdentity(
+            retailer="x-kom",
+            retailer_product_id="1001",
+            category="gpu",
+            name="Acme GPU",
+            brand=None,
+            manufacturer_sku=None,
+            product_url="https://www.x-kom.pl/p/1001.html",
+            image_url=None,
+        ),
+        price=Decimal("1800"),
+        currency="PLN",
+        availability=Availability.AVAILABLE,
+        previous_price=Decimal("2000"),
+        reported_minimum_price=None,
+        promotion_labels=(),
+        observed_at=observed_at,
+    )
+    database_path = tmp_path / "dealwatch.sqlite3"
+    store = SQLiteStore(database_path)
+    store.record_collection(
+        [
+            replace(
+                offer,
+                price=Decimal("2000"),
+                previous_price=None,
+                observed_at=observed_at - timedelta(days=8) + timedelta(hours=hour),
+            )
+            for hour in range(8 * 24)
+        ]
+    )
+    monkeypatch.setattr(cli.XkomGpuCollector, "collect_gpus", lambda self: [offer])
+    stdout = io.StringIO()
+
+    exit_code = cli.main(
+        ["xkom", "monitor-gpus", "--quiet"],
+        stdout=stdout,
+        environ={"DEALWATCH_DATABASE_PATH": str(database_path)},
+    )
+
+    assert exit_code == 0
+    result = json.loads(stdout.getvalue())
+    assert result["mode"] == "dry_run"
+    assert result["candidate_count"] == 1
+    assert result["delivered_count"] == 0
+    with sqlite3.connect(database_path) as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sent_notifications").fetchone()[0] == 0
+
+
+def test_monitor_gpus_send_requires_webhook_before_collecting(monkeypatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        cli.XkomGpuCollector,
+        "collect_gpus",
+        lambda self: (_ for _ in ()).throw(AssertionError("must not collect without webhook")),
+    )
+    stderr = io.StringIO()
+
+    exit_code = cli.main(
+        ["xkom", "monitor-gpus", "--send"],
+        stderr=stderr,
+        environ={"DEALWATCH_DATABASE_PATH": str(tmp_path / "dealwatch.sqlite3")},
+    )
+
+    assert exit_code == 2
+    assert "DISCORD_WEBHOOK_URL" in stderr.getvalue()

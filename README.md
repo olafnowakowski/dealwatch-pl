@@ -7,13 +7,13 @@ The long-term goal is to monitor retailers such as x-kom, Morele, Komputronik an
 ## Current Status
 
 🚧 Early development — x-kom GPU collection, SQLite price history and statistics,
-hourly local history collection, notification state, and rule-based deal candidate
-detection are implemented and verified.
+hourly x-kom monitoring, notification state, and rule-based deal delivery are
+implemented and verified.
 
 The current milestone is x-kom → GPU products → normalized product offers → local
 SQLite observations → explained deal candidates → notification state → an explicit
-Discord delivery test. It deliberately does not yet include deal scoring, automatic
-Discord alerts, or other retailers.
+Discord delivery. It deliberately does not yet include deal scoring, other retailers,
+or candidate re-arming/cooldown policy.
 
 ## Planned Features
 
@@ -45,7 +45,11 @@ price-history   deal engine
 analysis             ↓
            candidate JSON → notification state
                               ↓
-                    manual Discord test only
+                   M6 eligibility check
+                              ↓
+                         Discord webhook
+                              ↓
+                    successful event record
 ```
 
 `ProductIdentity` keeps retailer product identity separate from price. `ProductOffer`
@@ -92,12 +96,35 @@ By default, successful collection commands persist data to the Git-ignored
 `data/dealwatch.sqlite3` file. Set `DEALWATCH_DATABASE_PATH` to use another local
 SQLite path; never commit database files.
 
-## Hourly local history collection on Windows
+## Hourly x-kom monitoring on Windows
 
-Automatic collection has been pulled forward solely to accumulate enough real history
-for M5. The application still performs one collection and exits; Windows Task
-Scheduler invokes the external PowerShell wrapper once per hour. It does not send
-Discord notifications.
+The application performs one monitoring run and exits; Windows Task Scheduler invokes
+the external PowerShell wrapper once per hour. The runner collects and persists
+x-kom offers, evaluates M7 candidates, checks M6 state, sends eligible candidates to
+Discord, then records state only after each successful webhook response.
+
+`monitor-gpus` is dry-run by default. It writes no notification-state records and
+does not require a webhook:
+
+```powershell
+uv run dealwatch xkom monitor-gpus
+uv run dealwatch xkom monitor-gpus --quiet
+```
+
+Use `--send` only for deliberate delivery. The optional `--only-product PRODUCT_ID`
+is useful for a controlled single-product check, but it never bypasses the global
+safety checks:
+
+```powershell
+uv run dealwatch xkom monitor-gpus --send --only-product 1318534
+```
+
+Every run applies a hard circuit breaker: if more than three M6-eligible candidates
+exist, it sends none, records none, returns nonzero, and reports the block. Eligible
+candidates are sent serially. A failed webhook has no in-process retry, remains
+eligible for the next hourly run, and does not prevent later candidates from being
+processed. A compact summary includes collection/evaluation counts, factual history
+baseline counts, candidate signal counts, delivery outcomes, and breaker status.
 
 After `uv sync --all-groups`, register the task from the project root:
 
@@ -107,10 +134,12 @@ schtasks.exe /Run /TN "DealWatchPL-HourlyCollection"
 schtasks.exe /Query /TN "DealWatchPL-HourlyCollection" /V /FO LIST
 ```
 
-The task runs only while the current Windows user is signed in, avoids overlapping
-runs with an exclusive local lock file, and appends clear output to the ignored
-`data/logs/hourly-collection.log`. The lock records its process ID and is cleared if
-that process is gone (or after two hours). To stop the schedule, run:
+The task runs `monitor-gpus --send --quiet` only while the current Windows user is
+signed in, avoids overlapping runs with an exclusive local lock file, and appends
+clear output to the ignored `data/logs/hourly-monitoring.log`. The lock records its
+process ID and is cleared if that process is gone (or after two hours). A nonzero
+run also attempts a best-effort local `msg.exe` popup; that popup is independent of
+Discord and cannot change monitoring results. To stop the schedule, run:
 
 ```powershell
 .\scripts\unregister-hourly-collection.ps1
@@ -181,14 +210,17 @@ uv run dealwatch xkom notify-test 1318534
 ```
 
 `notify-test` is an explicit operator action and can be repeated. It also persists
-the collection it performs. Automatic alerts remain deferred.
+the collection it performs.
 
 Future notification delivery should use `dealwatch.notification_state.deliver_once`:
 it checks the caller-provided fingerprint, invokes the transport, and records the
 event only after that transport succeeds. Failed deliveries remain eligible for a
 later retry. Notification audit records never contain webhook URLs or secrets; use a
 non-secret destination label such as `discord:dealwatch-test` if a destination needs
-to be recorded.
+to be recorded. The monitoring command stores a one-way hash-derived destination
+label. If Discord accepts a post but SQLite cannot record it afterwards, the run
+fails prominently and a later run may duplicate that alert; this distributed-delivery
+edge is intentionally visible rather than hidden.
 
 ## Development
 

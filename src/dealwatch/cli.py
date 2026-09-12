@@ -17,6 +17,7 @@ from dealwatch.config import load_dotenv
 from dealwatch.deals import evaluate_deal
 from dealwatch.discord import DiscordNotificationError, send_test_notification
 from dealwatch.models import ProductOffer
+from dealwatch.monitoring import monitor_offers
 from dealwatch.storage import DEFAULT_DATABASE_PATH, PersistenceError, SQLiteStore
 
 
@@ -38,6 +39,25 @@ def build_parser() -> argparse.ArgumentParser:
     xkom_commands.add_parser(
         "evaluate-gpus",
         help="Collect, persist, and print explained deal candidates without notifying",
+    )
+    monitor = xkom_commands.add_parser(
+        "monitor-gpus",
+        help="Collect, persist, evaluate, and optionally deliver x-kom GPU candidates",
+    )
+    monitor.add_argument(
+        "--send",
+        action="store_true",
+        help="Enable Discord delivery; the default is a no-delivery dry run",
+    )
+    monitor.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Print one compact JSON summary suitable for scheduler logs",
+    )
+    monitor.add_argument(
+        "--only-product",
+        metavar="PRODUCT_ID",
+        help="When sending, deliver only this x-kom product after all safety checks",
     )
     history = xkom_commands.add_parser(
         "price-history", help="Print stored price history for one GPU"
@@ -73,6 +93,12 @@ def main(
         environment: Mapping[str, str] = os.environ
     else:
         environment = environ
+
+    if args.command == "monitor-gpus" and args.send and not environment.get(
+        "DISCORD_WEBHOOK_URL"
+    ):
+        print("DISCORD_WEBHOOK_URL must be set when monitor-gpus --send is used.", file=errors)
+        return 2
 
     try:
         store = SQLiteStore(_database_path(environment))
@@ -118,6 +144,35 @@ def main(
             )
             output.write("\n")
             return 0
+
+        if args.command == "monitor-gpus":
+            webhook_url = environment.get("DISCORD_WEBHOOK_URL") if args.send else None
+            if args.send:
+                with httpx.Client(timeout=20.0) as discord_client:
+                    summary = monitor_offers(
+                        store,
+                        offers,
+                        send_enabled=True,
+                        webhook_url=webhook_url,
+                        only_product_id=args.only_product,
+                        discord_client=discord_client,
+                    )
+            else:
+                summary = monitor_offers(
+                    store,
+                    offers,
+                    send_enabled=False,
+                    only_product_id=args.only_product,
+                )
+            json.dump(
+                summary.to_dict(include_candidates=not args.quiet),
+                output,
+                ensure_ascii=False,
+                indent=None if args.quiet else 2,
+                separators=(",", ":") if args.quiet else None,
+            )
+            output.write("\n")
+            return 0 if summary.is_successful else 1
 
         webhook_url = environment.get("DISCORD_WEBHOOK_URL")
         if not webhook_url:

@@ -156,19 +156,29 @@ introduces an explicit re-arming rule.
 
 ---
 
-## M8 — Automatic Monitoring (partially pulled forward for M5)
+## M8 — Safe Automatic Deal Delivery ✅
 
-Goal: Run DealWatch automatically.
+Goal: Safely connect M7 deal candidates to Discord through M6 notification state.
 
-The minimal Windows Task Scheduler setup below was implemented early only to collect
-the real observations required by M5. It is not automatic deal notification.
+Completed:
 
-Completed for local history collection:
+- one-shot `dealwatch xkom monitor-gpus` monitoring command
+- dry-run by default; explicit `--send` required for Discord delivery
+- collection, SQLite observations, M7 evaluation, M6 eligibility, Discord transport,
+  and post-success notification-state recording in that order
+- serial delivery with no in-process webhook retry; failed candidates remain eligible
+  for a later scheduled run
+- hard three-eligible-candidate circuit breaker that sends and records nothing when
+  tripped
+- non-secret hash-derived Discord destination identity in notification audit records
+- compact scheduler JSON summaries with history baseline and candidate signal counts
+- existing hourly Windows Task Scheduler runner updated in place, retaining its
+  overlap lock and task name
+- best-effort local `msg.exe` notification for nonzero monitoring runs
 
-- external hourly Task Scheduler invocation
-- one-shot collection process with no Python scheduler loop
-- overlap lock and local failure logging
-- no scheduled Discord notifications
+The hourly external scheduler was originally pulled forward to gather the historical
+data needed by M5. It now invokes safe M8 monitoring rather than collection alone;
+no long-running Python scheduler was added.
 
 Preferred architecture:
 
@@ -270,7 +280,7 @@ Do not introduce production infrastructure prematurely.
 
 ## Current Status
 
-Current milestone: **M7 — Basic Deal Detection is complete**.
+Current milestone: **M8 — Safe Automatic Deal Delivery is complete**.
 
 Completed end-to-end pipeline:
 
@@ -279,10 +289,11 @@ x-kom
 → GPU collector
 → normalized product
 → SQLite price observation
-→ CLI
-→ Discord webhook
-→ verified real notification
+→ M7 deal candidate
+→ M6 eligibility
+→ Discord webhook (when `--send` is explicit)
+→ post-success notification state
 ```
 
-Automatic Discord delivery remains intentionally unstarted. The next roadmap work must
-be explicitly selected before beginning it.
+The automated delivery flow is protected by the M8 circuit breaker. The next roadmap
+work must be explicitly selected before beginning it.

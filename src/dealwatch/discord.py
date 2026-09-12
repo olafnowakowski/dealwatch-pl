@@ -6,6 +6,7 @@ from decimal import Decimal
 
 import httpx
 
+from dealwatch.deals import DealCandidate
 from dealwatch.models import Availability, ProductOffer
 
 
@@ -25,7 +26,36 @@ def send_test_notification(
             f"Product {offer.product.retailer_product_id} is not currently available"
         )
 
-    response = client.post(webhook_url, json=_payload(offer))
+    _post_webhook(client, webhook_url, _payload(offer))
+
+
+def send_deal_notification(
+    client: httpx.Client,
+    webhook_url: str,
+    offer: ProductOffer,
+    candidate: DealCandidate,
+) -> None:
+    """Deliver one rule-qualified candidate without using retailer promotion labels."""
+
+    if offer.availability is not Availability.AVAILABLE:
+        raise DiscordNotificationError(
+            f"Product {offer.product.retailer_product_id} is not currently available"
+        )
+
+    _post_webhook(client, webhook_url, _candidate_payload(offer, candidate))
+
+
+def _post_webhook(
+    client: httpx.Client, webhook_url: str, payload: dict[str, object]
+) -> None:
+    try:
+        response = client.post(webhook_url, json=payload)
+    except httpx.RequestError as error:
+        raise DiscordNotificationError("Discord webhook request failed") from error
+    _raise_for_delivery_failure(response)
+
+
+def _raise_for_delivery_failure(response: httpx.Response) -> None:
     try:
         response.raise_for_status()
     except httpx.HTTPStatusError as error:
@@ -60,6 +90,39 @@ def _payload(offer: ProductOffer) -> dict[str, object]:
         "title": offer.product.name,
         "url": offer.product.product_url,
         "description": "Manual DealWatch PL Discord delivery test.",
+        "fields": fields,
+        "footer": {"text": f"Product ID: {offer.product.retailer_product_id}"},
+    }
+    if offer.product.image_url:
+        embed["thumbnail"] = {"url": offer.product.image_url}
+    return {
+        "username": "DealWatch PL",
+        "allowed_mentions": {"parse": []},
+        "embeds": [embed],
+    }
+
+
+def _candidate_payload(offer: ProductOffer, candidate: DealCandidate) -> dict[str, object]:
+    reasons = "\n".join(
+        (
+            f"{signal.signal_type.value}: "
+            f"{signal.percentage_savings:.2f}% / {signal.absolute_savings:.2f} {candidate.currency}"
+        )
+        for signal in candidate.signals
+    )
+    fields = [
+        {
+            "name": "Price",
+            "value": _format_price(candidate.price, candidate.currency),
+            "inline": True,
+        },
+        {"name": "History", "value": candidate.history_baseline.value, "inline": True},
+        {"name": "Why", "value": reasons, "inline": False},
+    ]
+    embed: dict[str, object] = {
+        "title": offer.product.name,
+        "url": offer.product.product_url,
+        "description": "DealWatch PL rule-based deal candidate.",
         "fields": fields,
         "footer": {"text": f"Product ID: {offer.product.retailer_product_id}"},
     }

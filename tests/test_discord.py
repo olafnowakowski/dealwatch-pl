@@ -7,7 +7,12 @@ from decimal import Decimal
 import httpx
 import pytest
 
-from dealwatch.discord import DiscordNotificationError, send_test_notification
+from dealwatch.deals import DealCandidate, DealSignal, DealSignalType, HistoryBaseline
+from dealwatch.discord import (
+    DiscordNotificationError,
+    send_deal_notification,
+    send_test_notification,
+)
 from dealwatch.models import Availability, ProductIdentity, ProductOffer
 
 
@@ -70,3 +75,50 @@ def test_wraps_discord_http_failure() -> None:
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
         with pytest.raises(DiscordNotificationError, match="HTTP 400"):
             send_test_notification(client, "https://discord.test/webhook", _offer())
+
+
+def test_wraps_discord_network_failure() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        raise httpx.ConnectError("offline", request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        with pytest.raises(DiscordNotificationError, match="request failed"):
+            send_test_notification(client, "https://discord.test/webhook", _offer())
+
+
+def test_sends_candidate_embed_with_history_and_evidence_but_no_promotion_labels() -> None:
+    payloads: list[dict[str, object]] = []
+    offer = _offer()
+    candidate = DealCandidate(
+        product=offer.product,
+        price=offer.price,
+        currency=offer.currency,
+        observed_at=offer.observed_at,
+        history_baseline=HistoryBaseline.SUFFICIENT_7D,
+        signals=(
+            DealSignal(
+                signal_type=DealSignalType.BELOW_7_DAY_MEDIAN,
+                reference_price=Decimal("2800"),
+                absolute_savings=Decimal("300.01"),
+                percentage_savings=Decimal("10.71"),
+                qualifies=True,
+            ),
+        ),
+        fingerprint="m7:v1:PLN:2499.99",
+    )
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        payloads.append(json.loads(request.content))
+        return httpx.Response(204, request=request)
+
+    with httpx.Client(transport=httpx.MockTransport(handler)) as client:
+        send_deal_notification(client, "https://discord.test/webhook", offer, candidate)
+
+    embed = payloads[0]["embeds"][0]
+    fields = {field["name"]: field["value"] for field in embed["fields"]}
+    assert embed["description"] == "DealWatch PL rule-based deal candidate."
+    assert fields["Price"] == "2499.99 PLN"
+    assert fields["History"] == "sufficient_7d"
+    assert "below_7_day_median" in fields["Why"]
+    assert "Promotions" not in fields
+    assert "Autumn sale" not in json.dumps(payloads[0])
