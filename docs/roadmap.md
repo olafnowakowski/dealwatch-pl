@@ -118,16 +118,21 @@ accumulate while M5 statistics remain intentionally conservative about missing t
 
 ---
 
-## M6 — Notification State & Deduplication
+## M6 — Notification State & Deduplication ✅
 
 Goal: Ensure users are not repeatedly notified about the same unchanged deal.
 
-Planned:
+Completed:
 
-- record sent notifications
-- know which price triggered an alert
-- notify again only after meaningful conditions change
-- support cooldown/state logic where appropriate
+- successfully delivered notification events persisted in SQLite
+- notification identity tied to the normalized retailer product identity
+- caller-defined alert type, reason, and fingerprint stored for future rules
+- observed price, currency, sent time, and non-secret destination label supported as audit data
+- equivalent fingerprints queried and stored idempotently per product
+- state recorded only after a caller-supplied delivery callback succeeds
+- failed delivery remains eligible for retry
+
+M6 intentionally does not define a deal, a cooldown, or an automatic notification.
 
 ---
 
@@ -262,7 +267,7 @@ Do not introduce production infrastructure prematurely.
 
 ## Current Status
 
-Current milestone: **M5 — Price History Logic is complete**.
+Current milestone: **M6 — Notification State & Deduplication is complete**.
 
 Completed end-to-end pipeline:
 
@@ -276,5 +281,4 @@ x-kom
 → verified real notification
 ```
 
-The next logical milestone is M6 — Notification State & Deduplication. It has not
-been started.
+The next logical milestone is M7 — Basic Deal Detection. It has not been started.

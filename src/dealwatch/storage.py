@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import sqlite3
-from collections.abc import Iterable
+from collections.abc import Iterable, Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
 from dealwatch.history import PriceHistoryAnalysis, analyze_price_history
-from dealwatch.models import Availability, PriceObservation, ProductOffer
+from dealwatch.models import (
+    Availability,
+    NotificationEvent,
+    PriceObservation,
+    ProductIdentity,
+    ProductOffer,
+)
 
 DEFAULT_DATABASE_PATH = Path("data/dealwatch.sqlite3")
 
@@ -112,7 +119,7 @@ class SQLiteStore:
 
         try:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connect() as connection:
+            with self._transaction() as connection:
                 self._create_schema(connection)
                 for offer in offers:
                     product_id = self._upsert_product(connection, offer)
@@ -157,7 +164,7 @@ class SQLiteStore:
         as_of_utc = _as_utc(as_of or datetime.now(UTC))
         try:
             self._database_path.parent.mkdir(parents=True, exist_ok=True)
-            with self._connect() as connection:
+            with self._transaction() as connection:
                 self._create_schema(connection)
                 product_row = connection.execute(
                     """
@@ -197,10 +204,94 @@ class SQLiteStore:
             as_of=as_of_utc,
         )
 
+    def has_successful_notification(self, event: NotificationEvent) -> bool:
+        """Return whether this caller-defined alert was previously delivered."""
+
+        try:
+            self._database_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._transaction() as connection:
+                self._create_schema(connection)
+                row = connection.execute(
+                    """
+                    SELECT 1
+                    FROM sent_notifications AS notification
+                    JOIN products AS product ON product.id = notification.product_id
+                    WHERE product.retailer = ?
+                      AND product.retailer_product_id = ?
+                      AND notification.fingerprint = ?
+                    """,
+                    (
+                        event.product.retailer,
+                        event.product.retailer_product_id,
+                        event.fingerprint,
+                    ),
+                ).fetchone()
+        except (OSError, sqlite3.Error) as error:
+            message = f"Could not read notification state from {self._database_path}: {error}"
+            raise PersistenceError(message) from error
+        return row is not None
+
+    def record_successful_notification(self, event: NotificationEvent) -> bool:
+        """Record one delivered alert, returning false if its fingerprint already exists.
+
+        Call this only after the transport reports success. The unique key makes a
+        completed notification idempotent without defining any alert or cooldown policy.
+        """
+
+        try:
+            self._database_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._transaction() as connection:
+                self._create_schema(connection)
+                product_id = self._upsert_product_identity(connection, event.product)
+                cursor = connection.execute(
+                    """
+                    INSERT INTO sent_notifications (
+                        product_id,
+                        alert_type,
+                        fingerprint,
+                        reason,
+                        observed_price,
+                        currency,
+                        destination_label,
+                        sent_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(product_id, fingerprint) DO NOTHING
+                    """,
+                    (
+                        product_id,
+                        event.alert_type,
+                        event.fingerprint,
+                        event.reason,
+                        _decimal_text(event.observed_price),
+                        event.currency,
+                        event.destination_label,
+                        _as_utc(event.sent_at).isoformat(),
+                    ),
+                )
+        except (OSError, sqlite3.Error) as error:
+            message = f"Could not persist notification state to {self._database_path}: {error}"
+            raise PersistenceError(message) from error
+        return cursor.rowcount == 1
+
     def _connect(self) -> sqlite3.Connection:
         connection = sqlite3.connect(self._database_path)
         connection.execute("PRAGMA foreign_keys = ON")
         return connection
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        """Commit or roll back a SQLite operation and close its connection."""
+
+        connection = self._connect()
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+        finally:
+            connection.close()
 
     @staticmethod
     def _create_schema(connection: sqlite3.Connection) -> None:
@@ -228,12 +319,31 @@ class SQLiteStore:
 
             CREATE INDEX IF NOT EXISTS idx_price_observations_product_observed_at
             ON price_observations (product_id, observed_at);
+
+            CREATE TABLE IF NOT EXISTS sent_notifications (
+                id INTEGER PRIMARY KEY,
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                alert_type TEXT NOT NULL,
+                fingerprint TEXT NOT NULL,
+                reason TEXT,
+                observed_price TEXT,
+                currency TEXT,
+                destination_label TEXT,
+                sent_at TEXT NOT NULL,
+                UNIQUE (product_id, fingerprint)
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_sent_notifications_product_sent_at
+            ON sent_notifications (product_id, sent_at);
             """
         )
 
     @staticmethod
     def _upsert_product(connection: sqlite3.Connection, offer: ProductOffer) -> int:
-        product = offer.product
+        return SQLiteStore._upsert_product_identity(connection, offer.product)
+
+    @staticmethod
+    def _upsert_product_identity(connection: sqlite3.Connection, product: ProductIdentity) -> int:
         connection.execute(
             """
             INSERT INTO products (

@@ -7,12 +7,13 @@ The long-term goal is to monitor retailers such as x-kom, Morele, Komputronik an
 ## Current Status
 
 🚧 Early development — x-kom GPU collection, SQLite price history and statistics,
-hourly local history collection, and a Discord delivery test are implemented and
-verified.
+hourly local history collection, Discord delivery tests, and reusable notification
+state are implemented and verified.
 
 The current milestone is x-kom → GPU products → normalized product offers → local
-SQLite observations → an explicit Discord delivery test. It deliberately does not
-yet include deal scoring, automatic Discord alerts, or other retailers.
+SQLite observations → notification state → an explicit Discord delivery test. It
+deliberately does not yet include deal scoring, automatic Discord alerts, or other
+retailers.
 
 ## Planned Features
 
@@ -39,9 +40,10 @@ x-kom GPU category HTML
  ProductIdentity + ProductOffer
           ↓
        SQLite store
-          ↓
-coverage-aware price-history analysis
-          ↓
+       ↙          ↘
+price-history      notification state
+analysis           (fingerprint deduplication)
+       ↓          ↓
  CLI JSON output / manual Discord test
 ```
 
@@ -49,6 +51,12 @@ coverage-aware price-history analysis
 records the observed price, availability, promotional information, and timestamp.
 Each successful collection upserts products by retailer plus external product ID, then
 appends one SQLite price observation per offer.
+
+Notification state is a separate SQLite table associated with the same stable product
+identity. A future deal rule supplies an alert type, a stable fingerprint, and any
+optional audit fields. The state layer uses that caller-defined fingerprint to decide
+whether the product has already received an equivalent successful notification. It
+does not decide whether something is a deal or apply a cooldown policy.
 
 ## Development Approach
 
@@ -144,8 +152,14 @@ uv run dealwatch xkom notify-test 1318534
 ```
 
 `notify-test` is an explicit operator action and can be repeated. It also persists
-the collection it performs. Automated alerts and persistent notification deduplication
-remain deferred.
+the collection it performs. Automatic alerts remain deferred.
+
+Future notification delivery should use `dealwatch.notification_state.deliver_once`:
+it checks the caller-provided fingerprint, invokes the transport, and records the
+event only after that transport succeeds. Failed deliveries remain eligible for a
+later retry. Notification audit records never contain webhook URLs or secrets; use a
+non-secret destination label such as `discord:dealwatch-test` if a destination needs
+to be recorded.
 
 ## Development
 
@@ -159,8 +173,8 @@ Discord.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md). The documented retrieval and history
-decisions are in [docs/decisions/](docs/decisions/).
+See [docs/roadmap.md](docs/roadmap.md). The documented retrieval, history, and
+notification-state decisions are in [docs/decisions/](docs/decisions/).
 
 ## Disclaimer
 

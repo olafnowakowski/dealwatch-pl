@@ -83,3 +83,27 @@ class PriceObservation:
             "availability": self.availability.value,
             "observed_at": self.observed_at.isoformat(),
         }
+
+
+@dataclass(frozen=True, slots=True)
+class NotificationEvent:
+    """A caller-defined alert that was successfully delivered to a destination."""
+
+    product: ProductIdentity
+    alert_type: str
+    fingerprint: str
+    sent_at: datetime
+    reason: str | None = None
+    observed_price: Decimal | None = None
+    currency: str | None = None
+    destination_label: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.alert_type.strip():
+            raise ValueError("alert_type must not be empty")
+        if not self.fingerprint.strip():
+            raise ValueError("fingerprint must not be empty")
+        if self.observed_price is not None and not self.currency:
+            raise ValueError("currency is required when observed_price is set")
+        if self.destination_label and "://" in self.destination_label:
+            raise ValueError("destination_label must be a non-secret label, not a URL")
