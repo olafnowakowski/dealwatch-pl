@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 
@@ -9,7 +10,15 @@ from dealwatch.deals import (
     HistoryBaseline,
     evaluate_deal,
 )
-from dealwatch.models import Availability, PriceObservation, ProductIdentity, ProductOffer
+from dealwatch.models import (
+    Availability,
+    PriceObservation,
+    ProductIdentity,
+    ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
+)
 from dealwatch.storage import ProductPriceHistory, StoredProduct
 
 AS_OF = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
@@ -83,6 +92,21 @@ def _signal_types(evaluation) -> set[DealSignalType]:
     if evaluation.candidate is None:
         return set()
     return {signal.signal_type for signal in evaluation.candidate.signals}
+
+
+def _xkom_reference(price: str) -> ReferencePriceEvidence:
+    return ReferencePriceEvidence(
+        source="x-kom",
+        scope=ReferencePriceScope.RETAILER,
+        kind=ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS,
+        price=Decimal(price),
+        currency="PLN",
+        reference_window_days=30,
+        source_url=_product().product_url,
+        match_method="direct_retailer_product_id",
+        first_seen_at=AS_OF,
+        last_seen_at=AS_OF,
+    )
 
 
 def test_sufficient_thirty_day_median_qualifies_with_explained_baseline() -> None:
@@ -262,3 +286,56 @@ def test_fingerprints_are_stable_for_same_price_and_change_for_new_price() -> No
     assert lower_price.candidate is not None
     assert first.candidate.fingerprint == repeated.candidate.fingerprint
     assert first.candidate.fingerprint != lower_price.candidate.fingerprint
+
+
+def test_xkom_reference_bootstrap_is_guarded_and_source_attributed() -> None:
+    offer = _offer("1800")
+    offer = replace(offer, reference_price_evidence=(_xkom_reference("2000"),))
+
+    disabled = evaluate_deal(offer, _history([]))
+    enabled = evaluate_deal(
+        offer,
+        _history([]),
+        rules=DealRules(enable_xkom_reference_bootstrap=True),
+    )
+
+    assert disabled.candidate is None
+    assert disabled.non_qualification_reasons == ("xkom_reference_bootstrap_is_disabled",)
+    assert enabled.history_baseline is HistoryBaseline.YOUNG_HISTORY
+    assert enabled.candidate is not None
+    signal = next(
+        signal
+        for signal in enabled.candidate.signals
+        if signal.signal_type is DealSignalType.XCOM_REPORTED_30_DAY_MINIMUM
+    )
+    assert signal.reference_source == "x-kom"
+    assert signal.reference_scope is ReferencePriceScope.RETAILER
+    assert signal.reference_kind is ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS
+    assert enabled.candidate.fingerprint == "m7:v1:PLN:1800.00"
+
+
+def test_xkom_reference_bootstrap_requires_exact_eight_percent_and_hundred_pln() -> None:
+    rules = DealRules(enable_xkom_reference_bootstrap=True)
+    exact = _offer("1840")
+    below_percentage = _offer("1841")
+    exact = replace(exact, reference_price_evidence=(_xkom_reference("2000"),))
+    below_percentage = replace(
+        below_percentage,
+        reference_price_evidence=(_xkom_reference("2000"),),
+    )
+
+    assert evaluate_deal(exact, _history([]), rules=rules).candidate is not None
+    assert evaluate_deal(below_percentage, _history([]), rules=rules).candidate is None
+
+
+def test_sufficient_native_history_does_not_qualify_from_xkom_reference_alone() -> None:
+    offer = _offer("1800")
+    offer = replace(offer, reference_price_evidence=(_xkom_reference("2000"),))
+    evaluation = evaluate_deal(
+        offer,
+        _history(_hourly_history(8, price="1800")),
+        rules=DealRules(enable_xkom_reference_bootstrap=True),
+    )
+
+    assert evaluation.history_baseline is HistoryBaseline.SUFFICIENT_7D
+    assert evaluation.candidate is None

@@ -1,11 +1,19 @@
 from __future__ import annotations
 
 import sqlite3
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal
 from pathlib import Path
 
-from dealwatch.models import Availability, ProductIdentity, ProductOffer
+from dealwatch.models import (
+    Availability,
+    ProductIdentity,
+    ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
+)
 from dealwatch.storage import PersistenceError, SQLiteStore
 
 
@@ -35,6 +43,21 @@ def _offer(
         reported_minimum_price=None,
         promotion_labels=(),
         observed_at=observed_at,
+    )
+
+
+def _xkom_reference(price: str, seen_at: datetime) -> ReferencePriceEvidence:
+    return ReferencePriceEvidence(
+        source="x-kom",
+        scope=ReferencePriceScope.RETAILER,
+        kind=ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS,
+        price=Decimal(price),
+        currency="PLN",
+        reference_window_days=30,
+        source_url="https://www.x-kom.pl/p/1001-acme-gpu.html",
+        match_method="direct_retailer_product_id",
+        first_seen_at=seen_at,
+        last_seen_at=seen_at,
     )
 
 
@@ -215,3 +238,36 @@ def test_failed_collection_rolls_back_without_changing_existing_history(
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM products").fetchone()[0] == 1
         assert connection.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0] == 1
+
+
+def test_reference_evidence_uses_contiguous_episodes_without_native_history_contamination(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "dealwatch.sqlite3"
+    store = SQLiteStore(database_path)
+    first_seen = datetime(2026, 9, 12, 10, 0, tzinfo=UTC)
+
+    for hours, reference_price in ((0, "600"), (1, "600"), (2, "500"), (3, "600")):
+        observed_at = first_seen + timedelta(hours=hours)
+        store.record_collection(
+            [
+                replace(
+                    _offer(price="550", observed_at=observed_at),
+                    reference_price_evidence=(_xkom_reference(reference_price, observed_at),),
+                )
+            ]
+        )
+
+    evidence = store.get_reference_price_evidence("x-kom", "1001")
+
+    assert [(item.price, item.first_seen_at, item.last_seen_at) for item in evidence] == [
+        (Decimal("600"), first_seen, first_seen + timedelta(hours=1)),
+        (Decimal("500"), first_seen + timedelta(hours=2), first_seen + timedelta(hours=2)),
+        (Decimal("600"), first_seen + timedelta(hours=3), first_seen + timedelta(hours=3)),
+    ]
+    with sqlite3.connect(database_path) as connection:
+        reference_count = connection.execute(
+            "SELECT COUNT(*) FROM reference_price_evidence"
+        ).fetchone()[0]
+        assert reference_count == 3
+        assert connection.execute("SELECT COUNT(*) FROM price_observations").fetchone()[0] == 4

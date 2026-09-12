@@ -49,6 +49,12 @@ def test_collects_paginated_products_and_normalizes_offers() -> None:
     assert regular.observed_at == observed_at
     assert discounted.previous_price == Decimal("2999.99")
     assert discounted.reported_minimum_price == Decimal("2599.99")
+    assert len(discounted.reference_price_evidence) == 1
+    reference = discounted.reference_price_evidence[0]
+    assert reference.source == "x-kom"
+    assert reference.price == Decimal("2599.99")
+    assert reference.reference_window_days == 30
+    assert reference.match_method == "direct_retailer_product_id"
     assert discounted.promotion_labels == ("Autumn sale", "Bundle")
     assert unavailable.availability is Availability.OUT_OF_STOCK
     assert minimal.product.brand is None

@@ -17,6 +17,9 @@ from dealwatch.models import (
     PriceObservation,
     ProductIdentity,
     ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
 )
 
 DEFAULT_DATABASE_PATH = Path("data/dealwatch.sqlite3")
@@ -144,6 +147,13 @@ class SQLiteStore:
                             offer.observed_at.isoformat(),
                         ),
                     )
+                    for evidence in offer.reference_price_evidence:
+                        self._record_reference_price_evidence(
+                            connection,
+                            product_id,
+                            evidence,
+                            seen_at=_as_utc(offer.observed_at),
+                        )
         except (OSError, sqlite3.Error) as error:
             message = f"Could not persist collection to {self._database_path}: {error}"
             raise PersistenceError(message) from error
@@ -203,6 +213,35 @@ class SQLiteStore:
             recent_window_days=recent_window_days,
             as_of=as_of_utc,
         )
+
+    def get_reference_price_evidence(
+        self,
+        retailer: str,
+        retailer_product_id: str,
+    ) -> tuple[ReferencePriceEvidence, ...]:
+        """Return source-attributed evidence episodes without reading native prices."""
+
+        try:
+            self._database_path.parent.mkdir(parents=True, exist_ok=True)
+            with self._transaction() as connection:
+                self._create_schema(connection)
+                rows = connection.execute(
+                    """
+                    SELECT evidence.source, evidence.scope, evidence.reference_kind,
+                           evidence.reference_price, evidence.currency,
+                           evidence.reference_window_days, evidence.source_url,
+                           evidence.match_method, evidence.first_seen_at, evidence.last_seen_at
+                    FROM reference_price_evidence AS evidence
+                    JOIN products AS product ON product.id = evidence.product_id
+                    WHERE product.retailer = ? AND product.retailer_product_id = ?
+                    ORDER BY evidence.id
+                    """,
+                    (retailer, retailer_product_id),
+                ).fetchall()
+        except (OSError, sqlite3.Error) as error:
+            message = f"Could not read reference evidence from {self._database_path}: {error}"
+            raise PersistenceError(message) from error
+        return tuple(_reference_evidence_from_row(row) for row in rows)
 
     def has_successful_notification(self, event: NotificationEvent) -> bool:
         """Return whether this caller-defined alert was previously delivered."""
@@ -329,6 +368,24 @@ class SQLiteStore:
             CREATE INDEX IF NOT EXISTS idx_price_observations_product_observed_at
             ON price_observations (product_id, observed_at);
 
+            CREATE TABLE IF NOT EXISTS reference_price_evidence (
+                id INTEGER PRIMARY KEY,
+                product_id INTEGER NOT NULL REFERENCES products(id),
+                source TEXT NOT NULL,
+                scope TEXT NOT NULL,
+                reference_kind TEXT NOT NULL,
+                reference_price TEXT NOT NULL,
+                currency TEXT NOT NULL,
+                reference_window_days INTEGER,
+                source_url TEXT NOT NULL,
+                match_method TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_reference_price_evidence_product
+            ON reference_price_evidence (product_id, id);
+
             CREATE TABLE IF NOT EXISTS sent_notifications (
                 id INTEGER PRIMARY KEY,
                 product_id INTEGER NOT NULL REFERENCES products(id),
@@ -350,6 +407,59 @@ class SQLiteStore:
     @staticmethod
     def _upsert_product(connection: sqlite3.Connection, offer: ProductOffer) -> int:
         return SQLiteStore._upsert_product_identity(connection, offer.product)
+
+    @staticmethod
+    def _record_reference_price_evidence(
+        connection: sqlite3.Connection,
+        product_id: int,
+        evidence: ReferencePriceEvidence,
+        *,
+        seen_at: datetime,
+    ) -> None:
+        latest = connection.execute(
+            """
+            SELECT id, source, scope, reference_kind, reference_price, currency,
+                   reference_window_days, source_url, match_method
+            FROM reference_price_evidence
+            WHERE product_id = ?
+              AND source = ?
+              AND scope = ?
+              AND reference_kind = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (product_id, evidence.source, evidence.scope.value, evidence.kind.value),
+        ).fetchone()
+        reference_values = (
+            evidence.source,
+            evidence.scope.value,
+            evidence.kind.value,
+            format(evidence.price, "f"),
+            evidence.currency,
+            evidence.reference_window_days,
+            evidence.source_url,
+            evidence.match_method,
+        )
+        if (
+            latest is not None
+            and latest[4] == reference_values[3]
+            and latest[5] == reference_values[4]
+        ):
+            connection.execute(
+                "UPDATE reference_price_evidence SET last_seen_at = ? WHERE id = ?",
+                (seen_at.isoformat(), latest[0]),
+            )
+            return
+        connection.execute(
+            """
+            INSERT INTO reference_price_evidence (
+                product_id, source, scope, reference_kind, reference_price, currency,
+                reference_window_days, source_url, match_method, first_seen_at, last_seen_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (product_id, *reference_values, seen_at.isoformat(), seen_at.isoformat()),
+        )
 
     @staticmethod
     def _upsert_product_identity(connection: sqlite3.Connection, product: ProductIdentity) -> int:
@@ -404,6 +514,26 @@ def _observation_from_row(row: tuple[str, str, str | None, str, str]) -> PriceOb
         )
     except (InvalidOperation, ValueError) as error:
         raise PersistenceError("Stored price observation has invalid data") from error
+
+
+def _reference_evidence_from_row(
+    row: tuple[str, str, str, str, str, int | None, str, str, str, str],
+) -> ReferencePriceEvidence:
+    try:
+        return ReferencePriceEvidence(
+            source=row[0],
+            scope=ReferencePriceScope(row[1]),
+            kind=ReferencePriceKind(row[2]),
+            price=Decimal(row[3]),
+            currency=row[4],
+            reference_window_days=row[5],
+            source_url=row[6],
+            match_method=row[7],
+            first_seen_at=_as_utc(datetime.fromisoformat(row[8])),
+            last_seen_at=_as_utc(datetime.fromisoformat(row[9])),
+        )
+    except (InvalidOperation, ValueError) as error:
+        raise PersistenceError("Stored reference evidence has invalid data") from error
 
 
 def _lowest_available(observations: Iterable[PriceObservation]) -> PriceObservation | None:

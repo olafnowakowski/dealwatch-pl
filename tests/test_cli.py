@@ -9,7 +9,15 @@ from decimal import Decimal
 from pathlib import Path
 
 from dealwatch import cli
-from dealwatch.models import Availability, NotificationEvent, ProductIdentity, ProductOffer
+from dealwatch.models import (
+    Availability,
+    NotificationEvent,
+    ProductIdentity,
+    ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
+)
 from dealwatch.storage import SQLiteStore
 
 
@@ -248,6 +256,69 @@ def test_monitor_gpus_dry_run_persists_observation_but_never_records_notificatio
     assert result["delivered_count"] == 0
     with sqlite3.connect(database_path) as connection:
         assert connection.execute("SELECT COUNT(*) FROM sent_notifications").fetchone()[0] == 0
+
+
+def test_monitor_gpus_reference_bootstrap_is_explicit_and_reports_counts(
+    monkeypatch, tmp_path: Path
+) -> None:
+    observed_at = datetime(2026, 10, 31, 12, 0, tzinfo=UTC)
+    product = ProductIdentity(
+        retailer="x-kom",
+        retailer_product_id="1001",
+        category="gpu",
+        name="Acme GPU",
+        brand=None,
+        manufacturer_sku=None,
+        product_url="https://www.x-kom.pl/p/1001.html",
+        image_url=None,
+    )
+    reference = ReferencePriceEvidence(
+        source="x-kom",
+        scope=ReferencePriceScope.RETAILER,
+        kind=ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS,
+        price=Decimal("2000"),
+        currency="PLN",
+        reference_window_days=30,
+        source_url=product.product_url,
+        match_method="direct_retailer_product_id",
+        first_seen_at=observed_at,
+        last_seen_at=observed_at,
+    )
+    offer = ProductOffer(
+        product=product,
+        price=Decimal("1800"),
+        currency="PLN",
+        availability=Availability.AVAILABLE,
+        previous_price=None,
+        reported_minimum_price=Decimal("2000"),
+        promotion_labels=(),
+        observed_at=observed_at,
+        reference_price_evidence=(reference,),
+    )
+    monkeypatch.setattr(cli.XkomGpuCollector, "collect_gpus", lambda self: [offer])
+
+    database_path = tmp_path / "dealwatch.sqlite3"
+    default_stdout = io.StringIO()
+    default_exit_code = cli.main(
+        ["xkom", "monitor-gpus", "--quiet"],
+        stdout=default_stdout,
+        environ={"DEALWATCH_DATABASE_PATH": str(database_path)},
+    )
+    enabled_stdout = io.StringIO()
+    enabled_exit_code = cli.main(
+        ["xkom", "monitor-gpus", "--quiet", "--reference-bootstrap"],
+        stdout=enabled_stdout,
+        environ={"DEALWATCH_DATABASE_PATH": str(database_path)},
+    )
+
+    assert default_exit_code == 0
+    assert json.loads(default_stdout.getvalue())["candidate_count"] == 0
+    assert enabled_exit_code == 0
+    result = json.loads(enabled_stdout.getvalue())
+    assert result["usable_xkom_reference_count"] == 1
+    assert result["reference_bootstrap_candidate_count"] == 1
+    assert result["candidate_signal_counts"] == {"below_xkom_reported_30d_minimum": 1}
+    assert not result["circuit_breaker"]["triggered"]
 
 
 def test_monitor_gpus_send_requires_webhook_before_collecting(monkeypatch, tmp_path: Path) -> None:

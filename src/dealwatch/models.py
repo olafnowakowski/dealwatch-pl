@@ -16,6 +16,57 @@ class Availability(StrEnum):
     UNKNOWN = "unknown"
 
 
+class ReferencePriceScope(StrEnum):
+    """Scope of a price reference that is not a DealWatch observation."""
+
+    RETAILER = "retailer"
+    MARKET = "market"
+
+
+class ReferencePriceKind(StrEnum):
+    """Known meanings for source-attributed price references."""
+
+    XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS = "xkom_reported_lowest_price_last_30_days"
+
+
+@dataclass(frozen=True, slots=True)
+class ReferencePriceEvidence:
+    """A source-attributed reference price, separate from native observations."""
+
+    source: str
+    scope: ReferencePriceScope
+    kind: ReferencePriceKind
+    price: Decimal
+    currency: str
+    reference_window_days: int | None
+    source_url: str
+    match_method: str
+    first_seen_at: datetime
+    last_seen_at: datetime
+
+    def __post_init__(self) -> None:
+        if self.price <= 0:
+            raise ValueError("reference price must be positive")
+        if self.reference_window_days is not None and self.reference_window_days <= 0:
+            raise ValueError("reference_window_days must be positive when set")
+        if self.last_seen_at < self.first_seen_at:
+            raise ValueError("last_seen_at must not precede first_seen_at")
+
+    def to_dict(self) -> dict[str, object]:
+        return {
+            "source": self.source,
+            "scope": self.scope.value,
+            "kind": self.kind.value,
+            "price": format(self.price, "f"),
+            "currency": self.currency,
+            "reference_window_days": self.reference_window_days,
+            "source_url": self.source_url,
+            "match_method": self.match_method,
+            "first_seen_at": self.first_seen_at.isoformat(),
+            "last_seen_at": self.last_seen_at.isoformat(),
+        }
+
+
 @dataclass(frozen=True, slots=True)
 class ProductIdentity:
     """Stable retailer product identity, intentionally excluding its price."""
@@ -42,6 +93,7 @@ class ProductOffer:
     reported_minimum_price: Decimal | None
     promotion_labels: tuple[str, ...]
     observed_at: datetime
+    reference_price_evidence: tuple[ReferencePriceEvidence, ...] = ()
 
     def to_dict(self) -> dict[str, object]:
         """Return JSON-safe data without converting currency values to floats."""
@@ -58,6 +110,9 @@ class ProductOffer:
             "reported_minimum_price": _decimal_to_string(self.reported_minimum_price),
             "promotion_labels": list(self.promotion_labels),
             "observed_at": self.observed_at.isoformat(),
+            "reference_price_evidence": [
+                evidence.to_dict() for evidence in self.reference_price_evidence
+            ],
         }
 
 

@@ -57,6 +57,12 @@ records the observed price, availability, promotional information, and timestamp
 Each successful collection upserts products by retailer plus external product ID, then
 appends one SQLite price observation per offer.
 
+When x-kom exposes `priceInfo.minPrice`, the adapter also carries it as separately
+stored reference evidence: `xkom_reported_lowest_price_last_30_days`. It is an
+x-kom-reported, retailer-scoped 30-day reference associated directly with the x-kom
+product—not a DealWatch observation or verified all-time low. It never contributes to
+M5 coverage, averages, medians, or native lows.
+
 Notification state is a separate SQLite table associated with the same stable product
 identity. A future deal rule supplies an alert type, a stable fingerprint, and any
 optional audit fields. The state layer uses that caller-defined fingerprint to decide
@@ -110,6 +116,22 @@ does not require a webhook:
 uv run dealwatch xkom monitor-gpus
 uv run dealwatch xkom monitor-gpus --quiet
 ```
+
+For a deliberate inspection of the guarded young-history bootstrap, add
+`--reference-bootstrap`. This allows an available offer to qualify only when it is at
+least both 8% and 100 PLN below a usable x-kom-reported 30-day reference. With
+sufficient native history, that reference can remain supporting evidence but cannot
+qualify a candidate by itself. This switch is deliberately absent from the scheduled
+task until separately approved:
+
+```powershell
+uv run dealwatch xkom monitor-gpus --reference-bootstrap --quiet
+```
+
+The monitoring summary reports `usable_xkom_reference_count` and
+`reference_bootstrap_candidate_count`. Reference evidence is stored as contiguous
+episodes: an unchanged latest value extends its last-seen time, while any change
+(including a later return to a former value) creates a new episode.
 
 Use `--send` only for deliberate delivery. The optional `--only-product PRODUCT_ID`
 is useful for a controlled single-product check, but it never bypasses the global

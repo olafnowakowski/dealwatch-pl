@@ -280,7 +280,9 @@ Do not introduce production infrastructure prematurely.
 
 ## Current Status
 
-Current milestone: **M8 — Safe Automatic Deal Delivery is complete**.
+Current milestone: **M8 — Safe Automatic Deal Delivery is complete**, with a verified
+manual-only guarded x-kom reference-price bootstrap available for separately approved
+rollout.
 
 Completed end-to-end pipeline:
 
@@ -297,3 +299,29 @@ x-kom
 
 The automated delivery flow is protected by the M8 circuit breaker. The next roadmap
 work must be explicitly selected before beginning it.
+
+---
+
+## Guarded x-kom Reference-Price Bootstrap ✅
+
+Goal: Make limited, source-attributed x-kom reference context available while native
+DealWatch history is still young, without weakening M5 statistics or changing the
+hourly scheduler automatically.
+
+Completed:
+
+- x-kom `priceInfo.minPrice` maps only to the retailer-scoped
+  `xkom_reported_lowest_price_last_30_days` reference kind
+- separate SQLite reference-evidence episodes preserve first/last seen times without
+  entering `price_observations`
+- only the latest identical reference extends an episode; changed values, including a
+  later reversion, create a new episode
+- explicit `monitor-gpus --reference-bootstrap` enables a young-history candidate
+  only when current price is at least 8% and 100 PLN below the x-kom reference
+- sufficient native 7/30-day history remains primary; the x-kom value is supporting
+  evidence there, never a qualifying replacement
+- M6 fingerprints and the hourly `monitor-gpus --send --quiet` task remain unchanged
+- live dry-run verified the guarded flow before any scheduler enablement
+
+FPSGuru and Ceneo remain deferred. Their values must not be inserted into native
+DealWatch observations if they are introduced later.

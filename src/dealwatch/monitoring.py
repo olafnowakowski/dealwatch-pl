@@ -4,12 +4,18 @@ from __future__ import annotations
 
 import hashlib
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime
 
 import httpx
 
-from dealwatch.deals import DealCandidate, evaluate_deal
+from dealwatch.deals import (
+    DEFAULT_DEAL_RULES,
+    DealCandidate,
+    DealRules,
+    evaluate_deal,
+    usable_xkom_reference_evidence,
+)
 from dealwatch.discord import DiscordNotificationError, send_deal_notification
 from dealwatch.models import NotificationEvent, ProductOffer
 from dealwatch.notification_state import deliver_once
@@ -25,11 +31,13 @@ class MonitoringCandidate:
     offer: ProductOffer
     candidate: DealCandidate
     already_sent: bool
+    created_by_reference_bootstrap: bool
 
     def to_dict(self) -> dict[str, object]:
         data = self.candidate.to_dict()
         data["already_notified"] = self.already_sent
         data["notification_eligible"] = not self.already_sent
+        data["created_by_reference_bootstrap"] = self.created_by_reference_bootstrap
         return data
 
 
@@ -51,6 +59,8 @@ class MonitoringSummary:
     collected_count: int
     evaluated_count: int
     history_baseline_counts: dict[str, int]
+    usable_xkom_reference_count: int
+    reference_bootstrap_candidate_count: int
     candidate_signal_counts: dict[str, int]
     candidates: tuple[MonitoringCandidate, ...]
     eligible_count: int
@@ -86,6 +96,8 @@ class MonitoringSummary:
             "collected_count": self.collected_count,
             "evaluated_count": self.evaluated_count,
             "history_baseline_counts": self.history_baseline_counts,
+            "usable_xkom_reference_count": self.usable_xkom_reference_count,
+            "reference_bootstrap_candidate_count": self.reference_bootstrap_candidate_count,
             "candidate_count": self.candidate_count,
             "candidate_signal_counts": self.candidate_signal_counts,
             "already_sent_count": self.already_sent_count,
@@ -113,6 +125,7 @@ def monitor_offers(
     webhook_url: str | None = None,
     only_product_id: str | None = None,
     discord_client: httpx.Client | None = None,
+    deal_rules: DealRules = DEFAULT_DEAL_RULES,
 ) -> MonitoringSummary:
     """Evaluate persisted offers and optionally deliver their unseen candidates.
 
@@ -120,7 +133,9 @@ def monitor_offers(
     retried here because a timed-out webhook request has ambiguous delivery state.
     """
 
-    records, baseline_counts = _candidate_records(store, offers)
+    records, baseline_counts, usable_xkom_reference_count = _candidate_records(
+        store, offers, deal_rules
+    )
     eligible = [record for record in records if not record.already_sent]
     circuit_breaker_triggered = len(eligible) > MAX_ELIGIBLE_CANDIDATES
     if not send_enabled or circuit_breaker_triggered:
@@ -128,6 +143,7 @@ def monitor_offers(
             offers,
             records,
             baseline_counts,
+            usable_xkom_reference_count,
             eligible_count=len(eligible),
             selected_count=0,
             delivered_count=0,
@@ -209,6 +225,7 @@ def monitor_offers(
         offers,
         records,
         baseline_counts,
+        usable_xkom_reference_count,
         eligible_count=len(eligible),
         selected_count=len(selected),
         delivered_count=delivered_count,
@@ -221,9 +238,11 @@ def monitor_offers(
 def _candidate_records(
     store: SQLiteStore,
     offers: list[ProductOffer],
-) -> tuple[list[MonitoringCandidate], dict[str, int]]:
+    deal_rules: DealRules,
+) -> tuple[list[MonitoringCandidate], dict[str, int], int]:
     records: list[MonitoringCandidate] = []
     baseline_counts: Counter[str] = Counter()
+    usable_xkom_reference_count = 0
     for offer in offers:
         history = store.get_price_history(
             offer.product.retailer,
@@ -234,10 +253,17 @@ def _candidate_records(
             raise PersistenceError(
                 f"Persisted x-kom product {offer.product.retailer_product_id} could not be read"
             )
-        evaluation = evaluate_deal(offer, history)
+        evaluation = evaluate_deal(offer, history, rules=deal_rules)
         baseline_counts[evaluation.history_baseline.value] += 1
+        if usable_xkom_reference_evidence(offer) is not None:
+            usable_xkom_reference_count += 1
         if evaluation.candidate is None:
             continue
+        without_bootstrap = evaluate_deal(
+            offer,
+            history,
+            rules=replace(deal_rules, enable_xkom_reference_bootstrap=False),
+        )
         records.append(
             MonitoringCandidate(
                 offer=offer,
@@ -246,15 +272,17 @@ def _candidate_records(
                     evaluation.candidate.product,
                     evaluation.candidate.fingerprint,
                 ),
+                created_by_reference_bootstrap=without_bootstrap.candidate is None,
             )
         )
-    return records, dict(baseline_counts)
+    return records, dict(baseline_counts), usable_xkom_reference_count
 
 
 def _summary(
     offers: list[ProductOffer],
     records: list[MonitoringCandidate],
     baseline_counts: dict[str, int],
+    usable_xkom_reference_count: int,
     *,
     eligible_count: int,
     selected_count: int,
@@ -270,6 +298,10 @@ def _summary(
         collected_count=len(offers),
         evaluated_count=len(offers),
         history_baseline_counts=baseline_counts,
+        usable_xkom_reference_count=usable_xkom_reference_count,
+        reference_bootstrap_candidate_count=sum(
+            candidate.created_by_reference_bootstrap for candidate in records
+        ),
         candidate_signal_counts=dict(signal_counts),
         candidates=tuple(records),
         eligible_count=eligible_count,

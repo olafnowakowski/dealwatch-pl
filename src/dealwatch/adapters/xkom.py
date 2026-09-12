@@ -13,7 +13,14 @@ from urllib.parse import urljoin
 
 import httpx
 
-from dealwatch.models import Availability, ProductIdentity, ProductOffer
+from dealwatch.models import (
+    Availability,
+    ProductIdentity,
+    ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
+)
 
 BASE_URL = "https://www.x-kom.pl"
 GPU_CATEGORY_URL = f"{BASE_URL}/g-5/c/345-karty-graficzne.html?per_page=60"
@@ -186,6 +193,27 @@ def _map_product(product_id: str, raw: dict[str, Any], *, observed_at: datetime)
         product_url=urljoin(BASE_URL, product_link),
         image_url=_optional_string(photo.get("url")),
     )
+    reported_minimum_price = _optional_decimal(price_info.get("minPrice"), "minPrice", product_id)
+    if reported_minimum_price is not None and reported_minimum_price <= 0:
+        reported_minimum_price = None
+    reference_price_evidence = (
+        (
+            ReferencePriceEvidence(
+                source="x-kom",
+                scope=ReferencePriceScope.RETAILER,
+                kind=ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS,
+                price=reported_minimum_price,
+                currency="PLN",
+                reference_window_days=30,
+                source_url=identity.product_url,
+                match_method="direct_retailer_product_id",
+                first_seen_at=observed_at,
+                last_seen_at=observed_at,
+            ),
+        )
+        if reported_minimum_price is not None
+        else ()
+    )
     labels = tuple(
         dict.fromkeys(
             label
@@ -200,11 +228,10 @@ def _map_product(product_id: str, raw: dict[str, Any], *, observed_at: datetime)
         currency="PLN",
         availability=_availability(raw.get("availabilityStatus")),
         previous_price=_optional_decimal(price_info.get("oldPrice"), "oldPrice", product_id),
-        reported_minimum_price=_optional_decimal(
-            price_info.get("minPrice"), "minPrice", product_id
-        ),
+        reported_minimum_price=reported_minimum_price,
         promotion_labels=labels,
         observed_at=observed_at,
+        reference_price_evidence=reference_price_evidence,
     )
 
 

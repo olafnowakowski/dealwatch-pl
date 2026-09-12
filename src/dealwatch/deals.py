@@ -9,7 +9,15 @@ from decimal import ROUND_HALF_UP, Decimal
 from enum import StrEnum
 
 from dealwatch.history import PriceHistoryAnalysis, WindowStatistics, analyze_price_history
-from dealwatch.models import Availability, PriceObservation, ProductIdentity, ProductOffer
+from dealwatch.models import (
+    Availability,
+    PriceObservation,
+    ProductIdentity,
+    ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
+)
 from dealwatch.storage import ProductPriceHistory
 
 
@@ -30,6 +38,7 @@ class DealSignalType(StrEnum):
     NEW_ALL_TIME_LOW = "new_all_time_low"
     NEW_30_DAY_LOW = "new_30_day_low"
     RETAILER_OLD_PRICE = "retailer_old_price_support"
+    XCOM_REPORTED_30_DAY_MINIMUM = "below_xkom_reported_30d_minimum"
 
 
 @dataclass(frozen=True, slots=True)
@@ -43,6 +52,8 @@ class DealRules:
     all_time_low_percent: Decimal = Decimal("5")
     thirty_day_low_percent: Decimal = Decimal("8")
     retailer_old_price_percent: Decimal = Decimal("10")
+    xkom_reference_bootstrap_percent: Decimal = Decimal("8")
+    enable_xkom_reference_bootstrap: bool = False
 
 
 DEFAULT_DEAL_RULES = DealRules()
@@ -58,6 +69,9 @@ class DealSignal:
     percentage_savings: Decimal
     qualifies: bool
     supports_candidate: bool = False
+    reference_source: str | None = None
+    reference_scope: ReferencePriceScope | None = None
+    reference_kind: ReferencePriceKind | None = None
 
     def to_dict(self) -> dict[str, object]:
         return {
@@ -67,6 +81,9 @@ class DealSignal:
             "percentage_savings": _decimal_text(self.percentage_savings),
             "qualifies": self.qualifies,
             "supports_candidate": self.supports_candidate,
+            "reference_source": self.reference_source,
+            "reference_scope": self.reference_scope.value if self.reference_scope else None,
+            "reference_kind": self.reference_kind.value if self.reference_kind else None,
         }
 
 
@@ -109,6 +126,7 @@ class DealEvaluation:
     history_baseline: HistoryBaseline
     history_analysis: PriceHistoryAnalysis
     signals: tuple[DealSignal, ...]
+    reference_evidence: tuple[ReferencePriceEvidence, ...]
     non_qualification_reasons: tuple[str, ...]
     candidate: DealCandidate | None
 
@@ -117,6 +135,7 @@ class DealEvaluation:
             "history_baseline": self.history_baseline.value,
             "history": self.history_analysis.to_dict(),
             "signals": [signal.to_dict() for signal in self.signals],
+            "reference_evidence": [evidence.to_dict() for evidence in self.reference_evidence],
             "non_qualification_reasons": list(self.non_qualification_reasons),
             "candidate": self.candidate.to_dict() if self.candidate else None,
         }
@@ -144,6 +163,7 @@ def evaluate_deal(
             history_baseline=baseline,
             history_analysis=analysis,
             signals=(),
+            reference_evidence=offer.reference_price_evidence,
             non_qualification_reasons=("product_is_not_available",),
             candidate=None,
         )
@@ -155,33 +175,33 @@ def evaluate_deal(
         thirty_day=thirty_day,
         rules=rules,
     )
-    qualifying = _qualifying_signals(signals, baseline)
+    qualifying = _qualifying_signals(signals, baseline, rules)
     if qualifying:
-        retailer_support = next(
-            (
-                signal
-                for signal in signals
-                if signal.signal_type is DealSignalType.RETAILER_OLD_PRICE and signal.qualifies
-            ),
-            None,
+        supporting = tuple(
+            replace(signal, supports_candidate=True)
+            for signal in signals
+            if signal not in qualifying
+            and signal.qualifies
+            and signal.signal_type
+            in {
+                DealSignalType.RETAILER_OLD_PRICE,
+                DealSignalType.XCOM_REPORTED_30_DAY_MINIMUM,
+            }
         )
-        if retailer_support:
-            candidate_signals = qualifying + (replace(retailer_support, supports_candidate=True),)
-        else:
-            candidate_signals = qualifying
         candidate = DealCandidate(
             product=offer.product,
             price=offer.price,
             currency=offer.currency,
             observed_at=offer.observed_at,
             history_baseline=baseline,
-            signals=candidate_signals,
+            signals=qualifying + supporting,
             fingerprint=_candidate_fingerprint(offer),
         )
         return DealEvaluation(
             history_baseline=baseline,
             history_analysis=analysis,
             signals=signals,
+            reference_evidence=offer.reference_price_evidence,
             non_qualification_reasons=(),
             candidate=candidate,
         )
@@ -190,7 +210,8 @@ def evaluate_deal(
         history_baseline=baseline,
         history_analysis=analysis,
         signals=signals,
-        non_qualification_reasons=_non_qualification_reasons(signals, baseline),
+        reference_evidence=offer.reference_price_evidence,
+        non_qualification_reasons=_non_qualification_reasons(signals, baseline, rules),
         candidate=None,
     )
 
@@ -271,11 +292,22 @@ def _inspect_signals(
                 rules,
             )
         )
+    if reference := usable_xkom_reference_evidence(offer):
+        signals.append(
+            _compare(
+                DealSignalType.XCOM_REPORTED_30_DAY_MINIMUM,
+                offer.price,
+                reference.price,
+                rules.xkom_reference_bootstrap_percent,
+                rules,
+                reference_evidence=reference,
+            )
+        )
     return tuple(signals)
 
 
 def _qualifying_signals(
-    signals: tuple[DealSignal, ...], baseline: HistoryBaseline
+    signals: tuple[DealSignal, ...], baseline: HistoryBaseline, rules: DealRules
 ) -> tuple[DealSignal, ...]:
     historical_types = {
         DealSignalType.BELOW_7_DAY_MEDIAN,
@@ -285,6 +317,8 @@ def _qualifying_signals(
     }
     if baseline is HistoryBaseline.YOUNG_HISTORY:
         eligible_types = historical_types | {DealSignalType.PRICE_DROP}
+        if rules.enable_xkom_reference_bootstrap:
+            eligible_types.add(DealSignalType.XCOM_REPORTED_30_DAY_MINIMUM)
     else:
         eligible_types = historical_types
     return tuple(
@@ -295,7 +329,7 @@ def _qualifying_signals(
 
 
 def _non_qualification_reasons(
-    signals: tuple[DealSignal, ...], baseline: HistoryBaseline
+    signals: tuple[DealSignal, ...], baseline: HistoryBaseline, rules: DealRules
 ) -> tuple[str, ...]:
     retailer_support = any(
         signal.signal_type is DealSignalType.RETAILER_OLD_PRICE and signal.qualifies
@@ -303,6 +337,12 @@ def _non_qualification_reasons(
     )
     if retailer_support:
         return ("retailer_old_price_is_supporting_evidence_only",)
+    reference_bootstrap = any(
+        signal.signal_type is DealSignalType.XCOM_REPORTED_30_DAY_MINIMUM and signal.qualifies
+        for signal in signals
+    )
+    if reference_bootstrap and not rules.enable_xkom_reference_bootstrap:
+        return ("xkom_reference_bootstrap_is_disabled",)
     if baseline is HistoryBaseline.YOUNG_HISTORY:
         return ("young_history_without_a_meaningful_price_drop",)
     return ("sufficient_history_without_a_meaningful_historical_discount",)
@@ -348,6 +388,8 @@ def _compare(
     reference_price: Decimal,
     required_percent: Decimal,
     rules: DealRules,
+    *,
+    reference_evidence: ReferencePriceEvidence | None = None,
 ) -> DealSignal:
     raw_absolute_savings = reference_price - current_price
     raw_percentage_savings = (
@@ -365,6 +407,30 @@ def _compare(
         absolute_savings=_quantize(raw_absolute_savings),
         percentage_savings=_quantize(raw_percentage_savings),
         qualifies=qualifies,
+        reference_source=reference_evidence.source if reference_evidence else None,
+        reference_scope=reference_evidence.scope if reference_evidence else None,
+        reference_kind=reference_evidence.kind if reference_evidence else None,
+    )
+
+
+def usable_xkom_reference_evidence(offer: ProductOffer) -> ReferencePriceEvidence | None:
+    """Return the current direct x-kom 30-day reference when it is usable."""
+
+    return next(
+        (
+            evidence
+            for evidence in offer.reference_price_evidence
+            if evidence.source == "x-kom"
+            and evidence.source == offer.product.retailer
+            and evidence.scope is ReferencePriceScope.RETAILER
+            and evidence.kind is ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS
+            and evidence.currency == offer.currency
+            and evidence.reference_window_days == 30
+            and evidence.match_method == "direct_retailer_product_id"
+            and evidence.source_url == offer.product.product_url
+            and evidence.price > 0
+        ),
+        None,
     )
 
 

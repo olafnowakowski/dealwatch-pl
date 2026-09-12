@@ -7,6 +7,7 @@ import json
 import os
 import sys
 from collections.abc import Mapping, Sequence
+from dataclasses import replace
 from pathlib import Path
 from typing import TextIO
 
@@ -14,7 +15,7 @@ import httpx
 
 from dealwatch.adapters.xkom import DEFAULT_USER_AGENT, XkomCollectionError, XkomGpuCollector
 from dealwatch.config import load_dotenv
-from dealwatch.deals import evaluate_deal
+from dealwatch.deals import DEFAULT_DEAL_RULES, evaluate_deal
 from dealwatch.discord import DiscordNotificationError, send_test_notification
 from dealwatch.models import ProductOffer
 from dealwatch.monitoring import monitor_offers
@@ -58,6 +59,13 @@ def build_parser() -> argparse.ArgumentParser:
         "--only-product",
         metavar="PRODUCT_ID",
         help="When sending, deliver only this x-kom product after all safety checks",
+    )
+    monitor.add_argument(
+        "--reference-bootstrap",
+        action="store_true",
+        help=(
+            "Allow the guarded x-kom reported 30-day reference signal for young native history"
+        ),
     )
     history = xkom_commands.add_parser(
         "price-history", help="Print stored price history for one GPU"
@@ -147,6 +155,10 @@ def main(
 
         if args.command == "monitor-gpus":
             webhook_url = environment.get("DISCORD_WEBHOOK_URL") if args.send else None
+            deal_rules = replace(
+                DEFAULT_DEAL_RULES,
+                enable_xkom_reference_bootstrap=args.reference_bootstrap,
+            )
             if args.send:
                 with httpx.Client(timeout=20.0) as discord_client:
                     summary = monitor_offers(
@@ -156,6 +168,7 @@ def main(
                         webhook_url=webhook_url,
                         only_product_id=args.only_product,
                         discord_client=discord_client,
+                        deal_rules=deal_rules,
                     )
             else:
                 summary = monitor_offers(
@@ -163,6 +176,7 @@ def main(
                     offers,
                     send_enabled=False,
                     only_product_id=args.only_product,
+                    deal_rules=deal_rules,
                 )
             json.dump(
                 summary.to_dict(include_candidates=not args.quiet),

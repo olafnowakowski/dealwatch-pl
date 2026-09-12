@@ -9,7 +9,15 @@ from pathlib import Path
 import httpx
 import pytest
 
-from dealwatch.models import Availability, ProductIdentity, ProductOffer
+from dealwatch.deals import DEFAULT_DEAL_RULES
+from dealwatch.models import (
+    Availability,
+    ProductIdentity,
+    ProductOffer,
+    ReferencePriceEvidence,
+    ReferencePriceKind,
+    ReferencePriceScope,
+)
 from dealwatch.monitoring import MAX_ELIGIBLE_CANDIDATES, monitor_offers
 from dealwatch.storage import SQLiteStore
 
@@ -36,6 +44,21 @@ def _offer(product_id: str, *, price: str = "1800") -> ProductOffer:
         reported_minimum_price=None,
         promotion_labels=("Retailer promotion",),
         observed_at=OBSERVED_AT,
+    )
+
+
+def _xkom_reference(offer: ProductOffer, price: str) -> ReferencePriceEvidence:
+    return ReferencePriceEvidence(
+        source="x-kom",
+        scope=ReferencePriceScope.RETAILER,
+        kind=ReferencePriceKind.XCOM_REPORTED_LOWEST_PRICE_LAST_30_DAYS,
+        price=Decimal(price),
+        currency="PLN",
+        reference_window_days=30,
+        source_url=offer.product.product_url,
+        match_method="direct_retailer_product_id",
+        first_seen_at=offer.observed_at,
+        last_seen_at=offer.observed_at,
     )
 
 
@@ -83,6 +106,69 @@ def test_dry_run_does_not_send_or_record_notification_state_and_counts_signals(
     }
     with sqlite3.connect(tmp_path / "dealwatch.sqlite3") as connection:
         assert connection.execute("SELECT COUNT(*) FROM sent_notifications").fetchone()[0] == 0
+
+
+def test_reference_bootstrap_is_opt_in_and_reported_in_dry_run(tmp_path: Path) -> None:
+    store = SQLiteStore(tmp_path / "dealwatch.sqlite3")
+    offer = _offer("1001")
+    offer = replace(
+        offer,
+        previous_price=None,
+        reference_price_evidence=(_xkom_reference(offer, "2000"),),
+    )
+    store.record_collection([offer])
+
+    default_summary = monitor_offers(store, [offer], send_enabled=False)
+    enabled_summary = monitor_offers(
+        store,
+        [offer],
+        send_enabled=False,
+        deal_rules=replace(DEFAULT_DEAL_RULES, enable_xkom_reference_bootstrap=True),
+    )
+
+    assert default_summary.candidate_count == 0
+    assert default_summary.usable_xkom_reference_count == 1
+    assert default_summary.reference_bootstrap_candidate_count == 0
+    assert enabled_summary.is_successful
+    assert enabled_summary.candidate_count == 1
+    assert enabled_summary.usable_xkom_reference_count == 1
+    assert enabled_summary.reference_bootstrap_candidate_count == 1
+    assert enabled_summary.candidate_signal_counts == {
+        "below_xkom_reported_30d_minimum": 1
+    }
+    assert enabled_summary.candidates[0].created_by_reference_bootstrap
+    assert not enabled_summary.circuit_breaker_triggered
+    with sqlite3.connect(tmp_path / "dealwatch.sqlite3") as connection:
+        assert connection.execute("SELECT COUNT(*) FROM sent_notifications").fetchone()[0] == 0
+
+
+def test_reference_bootstrap_candidates_still_trip_the_global_circuit_breaker(
+    tmp_path: Path,
+) -> None:
+    store = SQLiteStore(tmp_path / "dealwatch.sqlite3")
+    offers = []
+    for index in range(MAX_ELIGIBLE_CANDIDATES + 1):
+        offer = replace(_offer(str(1001 + index)), previous_price=None)
+        offers.append(
+            replace(
+                offer,
+                reference_price_evidence=(_xkom_reference(offer, "2000"),),
+            )
+        )
+    store.record_collection(offers)
+
+    summary = monitor_offers(
+        store,
+        offers,
+        send_enabled=False,
+        deal_rules=replace(DEFAULT_DEAL_RULES, enable_xkom_reference_bootstrap=True),
+    )
+
+    assert summary.circuit_breaker_triggered
+    assert summary.candidate_count == MAX_ELIGIBLE_CANDIDATES + 1
+    assert summary.reference_bootstrap_candidate_count == MAX_ELIGIBLE_CANDIDATES + 1
+    assert summary.eligible_count == MAX_ELIGIBLE_CANDIDATES + 1
+    assert summary.delivered_count == 0
 
 
 def test_successful_delivery_is_idempotent_and_stores_a_non_secret_destination_label(

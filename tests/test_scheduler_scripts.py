@@ -9,6 +9,7 @@ def test_hourly_runner_uses_safe_send_monitoring_with_existing_exclusive_lock() 
     )
 
     assert "monitor-gpus --send --quiet" in runner
+    assert "--reference-bootstrap" not in runner
     assert "hourly-collection.lock" in runner
     assert "FileMode]::CreateNew" in runner
     assert "msg.exe" in runner
