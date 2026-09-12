@@ -6,11 +6,11 @@ The long-term goal is to monitor retailers such as x-kom, Morele, Komputronik an
 
 ## Current Status
 
-🚧 Early development
+🚧 Early development — the x-kom GPU collection MVP is implemented and verified.
 
-Current MVP:
-
-x-kom → GPU products → normalized product data → Discord notification
+The current MVP is x-kom → GPU products → normalized product offers → an explicit
+Discord delivery test. It deliberately does not yet include price history, automatic
+deal scoring, scheduling, or other retailers.
 
 ## Planned Features
 
@@ -27,19 +27,21 @@ x-kom → GPU products → normalized product data → Discord notification
 - Scheduled monitoring
 - Docker deployment
 
-## Initial Architecture
+## MVP Architecture
 
-Retailer
-↓
-Store Adapter
-↓
-Normalized Product
-↓
-Deal Engine
-↓
-Discord
+```text
+x-kom GPU category HTML
+          ↓
+      x-kom adapter
+          ↓
+ ProductIdentity + ProductOffer
+          ↓
+ CLI JSON output / manual Discord test
+```
 
-Storage and historical price tracking will be added after basic collection is working.
+`ProductIdentity` keeps retailer product identity separate from price. `ProductOffer`
+records the observed price, availability, promotional information, and timestamp.
+Price-history storage will be added later.
 
 ## Development Approach
 
@@ -52,49 +54,45 @@ Retailer data retrieval should use the simplest reliable method available:
 
 More complex scraping technology should only be introduced when simpler methods are insufficient.
 
-## Tech Stack
+## Setup
 
-The final stack has not yet been decided.
+DealWatch PL requires Python 3.12+ and [uv](https://docs.astral.sh/uv/).
 
-Expected core technologies:
+```powershell
+uv sync --all-groups
+uv run dealwatch xkom collect-gpus
+```
 
-- Python
-- SQLite initially
-- Discord Webhooks
-- HTTP-based scraping where possible
+The collector fetches x-kom's public GPU category pages through ordinary HTTP,
+follows their pagination links, and parses the server-rendered hydration JSON. It
+waits at least one second between category-page requests.
+
+To test a Discord webhook with one in-stock x-kom product, set the webhook only in
+your shell or an ignored `.env` file, then pass an ID emitted by `collect-gpus`:
+
+```powershell
+$env:DISCORD_WEBHOOK_URL = "https://discord.com/api/webhooks/..."
+uv run dealwatch xkom notify-test 1318534
+```
+
+`notify-test` is an explicit operator action and can be repeated. Automated alerts,
+including persistent duplicate prevention, are deferred until the price-history and
+scheduling milestone.
+
+## Development
+
+```powershell
+uv run ruff check .
+uv run pytest
+```
+
+Tests use saved HTML fixtures and mocked HTTP clients; they do not contact x-kom or
+Discord.
 
 ## Roadmap
 
-### Phase 1 — MVP
-
-- [ ] Investigate x-kom product data
-- [ ] Create normalized product model
-- [ ] Implement x-kom GPU collector
-- [ ] Add tests
-- [ ] Send test deals to Discord
-
-### Phase 2 — Price Intelligence
-
-- [ ] Store products
-- [ ] Build price history
-- [ ] Prevent duplicate notifications
-- [ ] Implement basic deal detection
-- [ ] Add scheduled monitoring
-
-### Phase 3 — Multiple Stores
-
-- [ ] Morele
-- [ ] Komputronik
-- [ ] Media Expert
-- [ ] Other retailers
-
-### Phase 4 — Advanced Deal Detection
-
-- [ ] Cross-store product matching
-- [ ] Cross-store price comparison
-- [ ] 7/30/90-day statistics
-- [ ] Historical lows
-- [ ] Deal Score
+See [docs/roadmap.md](docs/roadmap.md). The documented retrieval decision is in
+[docs/decisions/0001-xkom-http-hydration.md](docs/decisions/0001-xkom-http-hydration.md).
 
 ## Disclaimer
 
