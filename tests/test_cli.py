@@ -125,3 +125,5 @@ def test_price_history_reads_existing_database_without_collecting(
     history = json.loads(stdout.getvalue())
     assert history["summary"]["observation_count"] == 1
     assert history["summary"]["all_time_low"]["current_price"] == "1999"
+    assert history["analysis"]["windows"]["7_day"]["status"] == "insufficient_history"
+    assert history["analysis"]["windows"]["7_day"]["average"] is None

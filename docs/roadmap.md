@@ -99,20 +99,22 @@ Do not implement deal detection yet.
 
 ---
 
-## M5 — Price History Logic 🚧
+## M5 — Price History Logic ✅
 
 Goal: Provide usable historical price information for products.
-
-Planned:
 
 - [x] retrieve ordered observations
 - [x] historical minimum from available observations
 - [x] configurable recent minimum from available observations
 - [x] current and previous observation retrieval
-- averages/medians over useful periods
-- price-change calculations
+- [x] absolute and percentage change versus the previous available observation
+- [x] coverage-aware, time-weighted 7-day average and median
+- [x] coverage-aware, time-weighted 30-day average and median
+- [x] available observation counts and actual coverage for each statistics window
+- [x] explicit sufficiency rules that suppress incomplete-window statistics
 
-Exact statistics should be decided when enough real observations exist.
+The hourly collector was pulled forward in M8 specifically so real observations can
+accumulate while M5 statistics remain intentionally conservative about missing time.
 
 ---
 
@@ -260,7 +262,7 @@ Do not introduce production infrastructure prematurely.
 
 ## Current Status
 
-Current milestone: **M5 — Price History Logic**.
+Current milestone: **M5 — Price History Logic is complete**.
 
 Completed end-to-end pipeline:
 
@@ -274,5 +276,5 @@ x-kom
 → verified real notification
 ```
 
-The next goal is to expose useful history calculations before implementing deal
-intelligence.
+The next logical milestone is M6 — Notification State & Deduplication. It has not
+been started.

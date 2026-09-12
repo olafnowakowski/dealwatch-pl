@@ -63,3 +63,23 @@ class ProductOffer:
 
 def _decimal_to_string(value: Decimal | None) -> str | None:
     return format(value, "f") if value is not None else None
+
+
+@dataclass(frozen=True, slots=True)
+class PriceObservation:
+    """One persisted price observation used by history and future deal logic."""
+
+    current_price: Decimal
+    currency: str
+    old_price: Decimal | None
+    availability: Availability
+    observed_at: datetime
+
+    def to_dict(self) -> dict[str, str | None]:
+        return {
+            "current_price": format(self.current_price, "f"),
+            "currency": self.currency,
+            "old_price": _decimal_to_string(self.old_price),
+            "availability": self.availability.value,
+            "observed_at": self.observed_at.isoformat(),
+        }

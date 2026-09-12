@@ -9,7 +9,8 @@ from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
 
-from dealwatch.models import ProductOffer
+from dealwatch.history import PriceHistoryAnalysis, analyze_price_history
+from dealwatch.models import Availability, PriceObservation, ProductOffer
 
 DEFAULT_DATABASE_PATH = Path("data/dealwatch.sqlite3")
 
@@ -35,26 +36,6 @@ class StoredProduct:
             "category": self.category,
             "name": self.name,
             "product_url": self.product_url,
-        }
-
-
-@dataclass(frozen=True, slots=True)
-class PriceObservation:
-    """One stored price observation for a product."""
-
-    current_price: Decimal
-    currency: str
-    old_price: Decimal | None
-    availability: str
-    observed_at: datetime
-
-    def to_dict(self) -> dict[str, str | None]:
-        return {
-            "current_price": format(self.current_price, "f"),
-            "currency": self.currency,
-            "old_price": _decimal_text(self.old_price),
-            "availability": self.availability,
-            "observed_at": self.observed_at.isoformat(),
         }
 
 
@@ -86,6 +67,12 @@ class ProductPriceHistory:
             observation for observation in self.observations if observation.observed_at >= cutoff
         )
 
+    @property
+    def analysis(self) -> PriceHistoryAnalysis:
+        """Return reusable, coverage-aware history metrics for this product."""
+
+        return analyze_price_history(self.observations, as_of=self.as_of)
+
     def to_dict(self) -> dict[str, object]:
         current = self.current_observation
         previous = self.previous_observation
@@ -96,7 +83,8 @@ class ProductPriceHistory:
             "summary": {
                 "observation_count": len(self.observations),
                 "available_observation_count": sum(
-                    observation.availability == "available" for observation in self.observations
+                    observation.availability is Availability.AVAILABLE
+                    for observation in self.observations
                 ),
                 "first_observed_at": first.observed_at.isoformat() if first else None,
                 "last_observed_at": current.observed_at.isoformat() if current else None,
@@ -109,6 +97,7 @@ class ProductPriceHistory:
                 ).isoformat(),
                 "recent_minimum": self.recent_minimum.to_dict() if self.recent_minimum else None,
             },
+            "analysis": self.analysis.to_dict(),
         }
 
 
@@ -291,7 +280,7 @@ def _observation_from_row(row: tuple[str, str, str | None, str, str]) -> PriceOb
             current_price=Decimal(row[0]),
             currency=row[1],
             old_price=Decimal(row[2]) if row[2] is not None else None,
-            availability=row[3],
+            availability=Availability(row[3]),
             observed_at=observed_at,
         )
     except (InvalidOperation, ValueError) as error:
@@ -302,7 +291,7 @@ def _lowest_available(observations: Iterable[PriceObservation]) -> PriceObservat
     available = [
         observation
         for observation in observations
-        if observation.availability == "available"
+        if observation.availability is Availability.AVAILABLE
     ]
     if not available:
         return None

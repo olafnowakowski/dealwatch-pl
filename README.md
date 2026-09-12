@@ -6,12 +6,13 @@ The long-term goal is to monitor retailers such as x-kom, Morele, Komputronik an
 
 ## Current Status
 
-🚧 Early development — x-kom GPU collection, SQLite price history, and a Discord
-delivery test are implemented and verified.
+🚧 Early development — x-kom GPU collection, SQLite price history and statistics,
+hourly local history collection, and a Discord delivery test are implemented and
+verified.
 
 The current milestone is x-kom → GPU products → normalized product offers → local
 SQLite observations → an explicit Discord delivery test. It deliberately does not
-yet include deal scoring, automatic alerts, scheduling, or other retailers.
+yet include deal scoring, automatic Discord alerts, or other retailers.
 
 ## Planned Features
 
@@ -38,6 +39,8 @@ x-kom GPU category HTML
  ProductIdentity + ProductOffer
           ↓
        SQLite store
+          ↓
+coverage-aware price-history analysis
           ↓
  CLI JSON output / manual Discord test
 ```
@@ -108,6 +111,20 @@ uv run dealwatch xkom price-history 1318534
 uv run dealwatch xkom price-history 1318534 --days 14
 ```
 
+The history JSON also includes reusable price-change and 7/30-day statistics. A price
+change compares the newest available observation with the prior available one.
+Window averages and medians are time-weighted: an available sampled price represents
+the interval until the next observation, so unchanged hourly samples show how long a
+price persisted. A gap greater than two hours breaks that coverage instead of being
+assumed to have kept the old price.
+
+To avoid misleading results, each 7/30-day statistic is emitted as
+`"insufficient_history"` with `average` and `median` set to `null` unless it has both
+at least 80% actual time coverage and at least 80% of the expected hourly available
+observations. The JSON reports the observed count, required count, coverage seconds,
+and coverage ratio for each window. This is expected until the hourly collector has
+accumulated enough local history.
+
 To configure a Discord webhook locally, copy the safe template to `.env`, then paste
 the URL after `DISCORD_WEBHOOK_URL=`. The real `.env` is ignored by Git; only
 `.env.example` is tracked.
@@ -142,8 +159,8 @@ Discord.
 
 ## Roadmap
 
-See [docs/roadmap.md](docs/roadmap.md). The documented retrieval decision is in
-[docs/decisions/0001-xkom-http-hydration.md](docs/decisions/0001-xkom-http-hydration.md).
+See [docs/roadmap.md](docs/roadmap.md). The documented retrieval and history
+decisions are in [docs/decisions/](docs/decisions/).
 
 ## Disclaimer
 

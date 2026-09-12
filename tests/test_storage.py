@@ -174,6 +174,24 @@ def test_price_history_ignores_unavailable_observations_for_low_prices(tmp_path:
     assert history.all_time_low.current_price == Decimal("1500")
 
 
+def test_price_history_keeps_the_earliest_observation_when_lows_are_equal(tmp_path: Path) -> None:
+    database_path = tmp_path / "dealwatch.sqlite3"
+    as_of = datetime(2026, 9, 12, 12, 0, tzinfo=UTC)
+    store = SQLiteStore(database_path)
+    store.record_collection(
+        [
+            _offer(price="1500", observed_at=as_of - timedelta(hours=2)),
+            _offer(price="1500", observed_at=as_of - timedelta(hours=1)),
+        ]
+    )
+
+    history = store.get_price_history("x-kom", "1001", as_of=as_of)
+
+    assert history is not None
+    assert history.all_time_low is not None
+    assert history.all_time_low.observed_at == as_of - timedelta(hours=2)
+
+
 def test_failed_collection_rolls_back_without_changing_existing_history(
     monkeypatch, tmp_path: Path
 ) -> None:
